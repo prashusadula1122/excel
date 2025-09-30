@@ -1100,7 +1100,7 @@ def convert_shopify_to_excel_with_date_columns_fixed(df):
         num_days = len(unique_dates)
         
         # Calculate dynamic threshold
-        dynamic_threshold = num_days * 5
+        dynamic_threshold = num_days * 1
 
         # Formats with conditional formatting based on net items sold
         header_format = workbook.add_format({
@@ -2442,8 +2442,11 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         # NEW: STORE PRODUCT COST INPUT VALUES - for Profit and Loss Products sheet
         product_cost_input_values = {}
         
-        # Use filtered_df_main for calculations
+        # CHANGED: Calculate total purchases per product for sorting AND pre-calculate other values
+        product_purchase_totals = []
         for product, product_df in df_main.groupby("Product"):
+            total_purchases = product_df.get("Purchases", 0).sum() if "Purchases" in product_df.columns else 0
+            
             # Calculate weighted average delivery rate for this product across all dates
             total_purchases_delivery = 0
             weighted_delivery_rate_sum = 0
@@ -2476,9 +2479,15 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 product_total_avg_prices[product] = weighted_avg_price_sum / total_purchases_price
             else:
                 product_total_avg_prices[product] = 0
+            
+            # Store for sorting
+            product_purchase_totals.append((product, product_df, total_purchases))
 
-        # Group by product and restructure data - SORT BY CPP WITHIN EACH PRODUCT (using filtered data)
-        for product, product_df in df_main.groupby("Product"):
+        # CHANGED: Sort products by total purchases in descending order (highest purchases first)
+        product_purchase_totals.sort(key=lambda x: x[2], reverse=True)
+
+        # CHANGED: Group by product and restructure data - SORT BY TOTAL PURCHASES DESCENDING
+        for product, product_df, total_purchases_for_product in product_purchase_totals:
             product_total_row_idx = row
             product_total_rows.append(product_total_row_idx)
 
@@ -2883,11 +2892,36 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 product_be_values[product] = round(be, 2)
                 
                 # NEW: Calculate and store Net Profit for this product (for Profit and Loss Products sheet)
-                total_amount_spent_usd = product_df.get("Amount Spent (USD)", 0).sum() if "Amount Spent (USD)" in product_df.columns else 0
-                net_profit = total_net_revenue - (total_amount_spent_usd * 100) - total_shipping_cost - total_operational_cost - total_product_cost
+                total_net_profit_for_product = 0                
+                for date in unique_dates:                    
+                    date_net_profit_for_date = 0
+                    date_data = product_df[product_df['Date'].astype(str) == date]                    
+                    for _, campaign_row in date_data.iterrows():
+                        date_purchases = round(campaign_row.get('Purchases', 0) if pd.notna(campaign_row.get('Purchases')) else 0, 2)
+                        date_amount_spent = round(campaign_row.get("Amount Spent (USD)", 0) if pd.notna(campaign_row.get("Amount Spent (USD)")) else 0, 2)
+                        
+                        # Get day-wise lookup data
+                        date_avg_price = round(product_date_avg_prices.get(product, {}).get(date, 0), 2)
+                        date_delivery_rate = round(product_date_delivery_rates.get(product, {}).get(date, 0), 2)
+                        date_product_cost = round(product_date_cost_inputs.get(product, {}).get(date, 0), 2)
+        
+                         # Calculate with rounding at each step (matching Excel exactly)
+                        delivery_rate = date_delivery_rate / 100 if date_delivery_rate > 1 else date_delivery_rate
+                        delivered_orders = round(date_purchases * delivery_rate, 2)
+                        net_revenue = round(delivered_orders * date_avg_price, 2)
+                        product_cost = round(delivered_orders * date_product_cost, 2)
+                        shipping_cost = round(date_purchases * shipping_rate, 2)
+                        operational_cost = round(date_purchases * operational_rate, 2)
+        
+        # Net Profit for this campaign on this date
+                        campaign_date_net_profit = round(net_revenue - (date_amount_spent * 100) - shipping_cost - operational_cost - product_cost, 2)
+                        date_net_profit_for_date += campaign_date_net_profit
+    
+    # Round the sum for this date (matching Excel's date-column rounding)
+                    date_net_profit_for_date = round(date_net_profit_for_date, 2)
+                    total_net_profit_for_product += date_net_profit_for_date
                 
-                product_net_profit_values[product] = round(net_profit, 2)
-                
+                product_net_profit_values[product] = round(total_net_profit_for_product, 2)
                 # NEW: Calculate and store Total Product Cost Input for this product (for Profit and Loss Products sheet)
                 # This should be the weighted average of product cost input across all dates for this product
                 weighted_cost_input_sum = 0
@@ -2918,6 +2952,9 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                         f"={product_be_ref}",
                         campaign_format
                     )
+                
+                # Continue with product total calculations...
+                # [Rest of the product total calculations remain the same as your original code]
                 
                 # PRODUCT TOTAL CALCULATIONS (similar to existing logic but with day-wise data)
                 for date in unique_dates:
@@ -3851,11 +3888,10 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         negative_profit_sheet.set_column(10, 10, 40)  # Comment / Reason
         negative_profit_sheet.set_column(11, 11, 40)  # Reason (for severe campaigns only)
         
-        # ==== NEW SHEET: Profit and Loss Products ====
-        # SHEET 1: POSITIVE NET PROFIT PRODUCTS
-        positive_profit_sheet = workbook.add_worksheet("Positive Net Profit Products")
+        # ==== COMBINED SHEET: Profit and Loss Products ====
+        profit_loss_sheet = workbook.add_worksheet("Profit and Loss Products")
         
-        # Formats for positive profit sheet
+        # Formats for combined profit and loss sheet
         positive_profit_header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
             "fg_color": "#4CAF50", "font_name": "Calibri", "font_size": 11
@@ -3865,30 +3901,80 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
             "fg_color": "#E8F5E8", "font_name": "Calibri", "font_size": 11,
             "num_format": "#,##0.00"
         })
+        negative_profit_header_format_combined = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#FF6B6B", "font_name": "Calibri", "font_size": 11
+        })
+        negative_profit_data_format_combined = workbook.add_format({
+            "align": "left", "valign": "vcenter",
+            "fg_color": "#FFEBEE", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00",
+            "font_color": "#D32F2F"
+        })
+        moderate_negative_format_combined = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#FFA500", "font_name": "Calibri", "font_size": 11
+        })
+        moderate_negative_data_format_combined = workbook.add_format({
+            "align": "left", "valign": "vcenter",
+            "fg_color": "#FFF3E0", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00",
+            "font_color": "#F57C00"
+        })
+        overall_summary_format = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#E0E0E0", "font_name": "Calibri", "font_size": 11
+        })
         
-        # Headers for positive profit sheet
-        positive_profit_headers = ["Product Name", "Total Product Cost Input", "Total Net Profit"]
+        current_row = 0
         
-        for col_num, header in enumerate(positive_profit_headers):
-            safe_write(positive_profit_sheet, 0, col_num, header, positive_profit_header_format)
+        # ==== SECTION 1: POSITIVE NET PROFIT PRODUCTS ====
+        safe_write(profit_loss_sheet, current_row, 0, "POSITIVE NET PROFIT PRODUCTS", positive_profit_header_format)
+        current_row += 1
+        
+        # Headers for positive profit products
+        positive_headers = ["Product Name", "Total Net Profit %", "Total Net Profit"]
+        
+        for col_num, header in enumerate(positive_headers):
+            safe_write(profit_loss_sheet, current_row, col_num, header, positive_profit_header_format)
+        current_row += 1
         
         # Filter and sort positive products by net profit (highest to lowest)
         positive_products = [(product, net_profit) for product, net_profit in product_net_profit_values.items() if net_profit >= 0]
         positive_products.sort(key=lambda x: x[1], reverse=True)
         
         # Write positive product data
-        current_row = 1
-        for product, net_profit in positive_products:
-            cost_input = product_cost_input_values.get(product, 0)
-            
-            safe_write(positive_profit_sheet, current_row, 0, str(product), positive_profit_data_format)
-            safe_write(positive_profit_sheet, current_row, 1, cost_input, positive_profit_data_format)
-            safe_write(positive_profit_sheet, current_row, 2, net_profit, positive_profit_data_format)
+        if positive_products:
+            for product, net_profit in positive_products:
+        # Calculate Net Profit % for this product
+        # Get Total Net Revenue, Total Purchases, and other values from the product
+               product_data = df_main[df_main['Product'] == product]
+               total_purchases = product_data['Purchases'].sum() if 'Purchases' in product_data.columns else 0
+        
+        # Use the pre-calculated product-level values
+               product_avg_price = product_total_avg_prices.get(product, 0)
+               product_delivery_rate = product_total_delivery_rates.get(product, 0)
+        
+        # Calculate Net Profit %
+               if product_avg_price > 0 and total_purchases > 0:
+                    delivery_rate = product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate
+                    denominator = product_avg_price * delivery_rate * total_purchases
+                    net_profit_percent = (net_profit / denominator * 100) if denominator > 0 else 0
+               else:
+                    net_profit_percent = 0
+        
+               safe_write(profit_loss_sheet, current_row, 0, str(product), positive_profit_data_format)
+               safe_write(profit_loss_sheet, current_row, 1, round(net_profit_percent, 2), positive_profit_data_format)
+               safe_write(profit_loss_sheet, current_row, 2, net_profit, positive_profit_data_format)
+               current_row += 1
+
+        else:
+            safe_write(profit_loss_sheet, current_row, 0, "No products with positive net profit found", positive_profit_data_format)
             current_row += 1
         
         # Add summary for positive products
         current_row += 2
-        safe_write(positive_profit_sheet, current_row, 0, "SUMMARY - POSITIVE NET PROFIT PRODUCTS", positive_profit_header_format)
+        safe_write(profit_loss_sheet, current_row, 0, "SUMMARY - POSITIVE NET PROFIT PRODUCTS", positive_profit_header_format)
         current_row += 1
         
         total_positive_products = len(positive_products)
@@ -3897,57 +3983,44 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         avg_positive_net_profit = total_positive_net_profit / total_positive_products if total_positive_products > 0 else 0
         avg_positive_cost_input = total_positive_cost_input / total_positive_products if total_positive_products > 0 else 0
         
-        safe_write(positive_profit_sheet, current_row, 0, f"Total Positive Products: {total_positive_products}", positive_profit_data_format)
-        safe_write(positive_profit_sheet, current_row + 1, 0, f"Total Net Profit (Positive Products): {round(total_positive_net_profit, 2)}", positive_profit_data_format)
-        safe_write(positive_profit_sheet, current_row + 2, 0, f"Total Product Cost Input (Positive Products): {round(total_positive_cost_input, 2)}", positive_profit_data_format)
-        safe_write(positive_profit_sheet, current_row + 3, 0, f"Average Net Profit per Product: {round(avg_positive_net_profit, 2)}", positive_profit_data_format)
-        safe_write(positive_profit_sheet, current_row + 4, 0, f"Average Product Cost Input per Product: {round(avg_positive_cost_input, 2)}", positive_profit_data_format)
+        safe_write(profit_loss_sheet, current_row, 0, f"Total Positive Products: {total_positive_products}", positive_profit_data_format)
+        safe_write(profit_loss_sheet, current_row + 1, 0, f"Total Net Profit (Positive Products): {round(total_positive_net_profit, 2)}", positive_profit_data_format)
         
-        # Set column widths for positive profit sheet
-        positive_profit_sheet.set_column(0, 0, 30)  # Product Name
-        positive_profit_sheet.set_column(1, 1, 25)  # Total Product Cost Input
-        positive_profit_sheet.set_column(2, 2, 20)  # Total Net Profit
+        safe_write(profit_loss_sheet, current_row + 3, 0, f"Average Net Profit per Product: {round(avg_positive_net_profit, 2)}", positive_profit_data_format)
         
-        # SHEET 2: NEGATIVE NET PROFIT PRODUCTS WITH RATIO AND CONDITIONAL SPLITTING
-        negative_profit_sheet_products = workbook.add_worksheet("Negative Net Profit Products")
+        current_row += 8  # Add gap between sections
         
-        # Formats for negative profit sheet
-        negative_profit_header_format_products = workbook.add_format({
-            "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#FF6B6B", "font_name": "Calibri", "font_size": 11
-        })
-        negative_profit_data_format_products = workbook.add_format({
-            "align": "left", "valign": "vcenter",
-            "fg_color": "#FFEBEE", "font_name": "Calibri", "font_size": 11,
-            "num_format": "#,##0.00",
-            "font_color": "#D32F2F"
-        })
-        # Format for products with ratio >= 0.2
-        moderate_negative_format_products = workbook.add_format({
-            "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#FFA500", "font_name": "Calibri", "font_size": 11
-        })
-        moderate_negative_data_format_products = workbook.add_format({
-            "align": "left", "valign": "vcenter",
-            "fg_color": "#FFF3E0", "font_name": "Calibri", "font_size": 11,
-            "num_format": "#,##0.00",
-            "font_color": "#F57C00"
-        })
+        # ==== SECTION 2: NEGATIVE NET PROFIT PRODUCTS ====
         
         # Filter negative products and calculate ratio
         negative_products_with_ratio = []
         for product, net_profit in product_net_profit_values.items():
             if net_profit < 0:
-                cost_input = product_cost_input_values.get(product, 0)
-                # Calculate ratio: Total Net Profit / Total Product Cost Input
-                if cost_input != 0:
-                    ratio = net_profit / cost_input
+        # Calculate Total Total Product Cost for this product
+                total_product_cost = 0
+                product_data = df_main[df_main['Product'] == product]
+        
+                for date in unique_dates:
+                      date_data = product_data[product_data['Date'].astype(str) == date]
+                      if not date_data.empty:
+                        date_purchases = date_data['Purchases'].sum() if 'Purchases' in date_data.columns else 0
+                        date_delivery_rate = product_date_delivery_rates.get(product, {}).get(date, 0)
+                        date_product_cost_input = product_date_cost_inputs.get(product, {}).get(date, 0)
+                
+                        delivery_rate = date_delivery_rate / 100 if date_delivery_rate > 1 else date_delivery_rate
+                        delivered_orders = round(date_purchases * delivery_rate, 2)
+                        product_cost = round(delivered_orders * date_product_cost_input, 2)
+                        total_product_cost += product_cost
+        
+        # Calculate ratio: Total Net Profit / Total Total Product Cost
+                if total_product_cost != 0:
+                   ratio = (1 + ( net_profit/total_product_cost )) * 100
                 else:
                     ratio = 0  # Handle division by zero
                 
                 negative_products_with_ratio.append({
                     'product': product,
-                    'cost_input': cost_input,
+                    'total_product_cost': round(total_product_cost, 2),
                     'net_profit': net_profit,
                     'ratio': ratio
                 })
@@ -3956,109 +4029,129 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         negative_products_with_ratio.sort(key=lambda x: x['ratio'])
         
         # Split into two groups based on ratio threshold (0.2)
-        ratio_less_than_02 = [p for p in negative_products_with_ratio if p['ratio'] < 0.2]
-        ratio_greater_equal_02 = [p for p in negative_products_with_ratio if p['ratio'] >= 0.2]
+        ratio_less_than_20 = [p for p in negative_products_with_ratio if p['ratio'] < 20]
+        ratio_greater_equal_20 = [p for p in negative_products_with_ratio if p['ratio'] >= 20]
         
-        current_row = 0
-        
-        # TABLE 1: Products with ratio < 0.2 (worse performance)
-        safe_write(negative_profit_sheet_products, current_row, 0, "NEGATIVE NET PROFIT PRODUCTS - RATIO < 0.2 (CRITICAL)", negative_profit_header_format_products)
+        # SUBSECTION 2A: Products with ratio < 20 (critical)
+        safe_write(profit_loss_sheet, current_row, 0, "NEGATIVE NET PROFIT PRODUCTS - RATIO < 20 (CRITICAL)", negative_profit_header_format_combined)
         current_row += 1
         
         # Headers with ratio column
-        negative_headers_with_ratio = ["Product Name", "Total Product Cost Input", "Total Net Profit", "Net Profit / Cost Input Ratio"]
+        negative_headers_with_ratio = ["Product Name", "Total Total Product Cost", "Total Net Profit", "Net Profit / Total Product Cost Ratio"]
+
         
         for col_num, header in enumerate(negative_headers_with_ratio):
-            safe_write(negative_profit_sheet_products, current_row, col_num, header, negative_profit_header_format_products)
+            safe_write(profit_loss_sheet, current_row, col_num, header, negative_profit_header_format_combined)
         current_row += 1
         
         # Write products with ratio < 0.2
-        if ratio_less_than_02:
-            for product_data in ratio_less_than_02:
-                safe_write(negative_profit_sheet_products, current_row, 0, str(product_data['product']), negative_profit_data_format_products)
-                safe_write(negative_profit_sheet_products, current_row, 1, product_data['cost_input'], negative_profit_data_format_products)
-                safe_write(negative_profit_sheet_products, current_row, 2, product_data['net_profit'], negative_profit_data_format_products)
-                safe_write(negative_profit_sheet_products, current_row, 3, round(product_data['ratio'], 4), negative_profit_data_format_products)
+        if ratio_less_than_20:
+            for product_data in ratio_less_than_20:
+                safe_write(profit_loss_sheet, current_row, 0, str(product_data['product']), negative_profit_data_format_combined)
+                safe_write(profit_loss_sheet, current_row, 1, product_data['total_product_cost'], negative_profit_data_format_combined)
+                safe_write(profit_loss_sheet, current_row, 2, product_data['net_profit'], negative_profit_data_format_combined)
+                safe_write(profit_loss_sheet, current_row, 3, round(product_data['ratio'], 4), negative_profit_data_format_combined)
                 current_row += 1
         else:
-            safe_write(negative_profit_sheet_products, current_row, 0, "No products found with ratio < 0.2", negative_profit_data_format_products)
+            safe_write(profit_loss_sheet, current_row, 0, "No products found with ratio < 20", negative_profit_data_format_combined)
             current_row += 1
         
         # Add summary for ratio < 0.2
         current_row += 2
-        safe_write(negative_profit_sheet_products, current_row, 0, "SUMMARY - RATIO < 0.2 (CRITICAL)", negative_profit_header_format_products)
+        safe_write(profit_loss_sheet, current_row, 0, "SUMMARY - RATIO < 20 (CRITICAL)", negative_profit_header_format_combined)
         current_row += 1
         
-        total_critical_products = len(ratio_less_than_02)
-        total_critical_net_profit = sum([p['net_profit'] for p in ratio_less_than_02])
-        total_critical_cost_input = sum([p['cost_input'] for p in ratio_less_than_02])
-        avg_critical_ratio = sum([p['ratio'] for p in ratio_less_than_02]) / total_critical_products if total_critical_products > 0 else 0
+        total_critical_products = len(ratio_less_than_20)
+        total_critical_net_profit = sum([p['net_profit'] for p in ratio_less_than_20])
+        total_critical_cost_input = sum([p['total_product_cost'] for p in ratio_less_than_20])
+        avg_critical_ratio = sum([p['ratio'] for p in ratio_less_than_20]) / total_critical_products if total_critical_products > 0 else 0
         
-        safe_write(negative_profit_sheet_products, current_row, 0, f"Products with ratio < 0.2: {total_critical_products}", negative_profit_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 1, 0, f"Total Net Profit (Critical): {round(total_critical_net_profit, 2)}", negative_profit_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 2, 0, f"Total Product Cost Input (Critical): {round(total_critical_cost_input, 2)}", negative_profit_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 3, 0, f"Average Ratio (Critical): {round(avg_critical_ratio, 4)}", negative_profit_data_format_products)
+        safe_write(profit_loss_sheet, current_row, 0, f"Products with ratio < 20: {total_critical_products}", negative_profit_data_format_combined)
+        safe_write(profit_loss_sheet, current_row + 1, 0, f"Total Net Profit (Critical): {round(total_critical_net_profit, 2)}", negative_profit_data_format_combined)
+        safe_write(profit_loss_sheet, current_row + 2, 0, f"Total Product Cost Input (Critical): {round(total_critical_cost_input, 2)}", negative_profit_data_format_combined)
+        safe_write(profit_loss_sheet, current_row + 3, 0, f"Average Ratio (Critical): {round(avg_critical_ratio, 4)}", negative_profit_data_format_combined)
         
-        # TABLE 2: Products with ratio >= 0.2 (better performance among negatives)
-        current_row += 7  # Add gap between tables
+        current_row += 7  # Add gap between subsections
         
-        safe_write(negative_profit_sheet_products, current_row, 0, "NEGATIVE NET PROFIT PRODUCTS - RATIO >= 0.2 (MODERATE)", moderate_negative_format_products)
+        # SUBSECTION 2B: Products with ratio >= 0.2 (moderate)
+        safe_write(profit_loss_sheet, current_row, 0, "NEGATIVE NET PROFIT PRODUCTS - RATIO >= 20 (MODERATE)", moderate_negative_format_combined)
         current_row += 1
         
-        # Headers for second table
+        # Headers for second subsection
         for col_num, header in enumerate(negative_headers_with_ratio):
-            safe_write(negative_profit_sheet_products, current_row, col_num, header, moderate_negative_format_products)
+            safe_write(profit_loss_sheet, current_row, col_num, header, moderate_negative_format_combined)
         current_row += 1
         
         # Write products with ratio >= 0.2
-        if ratio_greater_equal_02:
-            for product_data in ratio_greater_equal_02:
-                safe_write(negative_profit_sheet_products, current_row, 0, str(product_data['product']), moderate_negative_data_format_products)
-                safe_write(negative_profit_sheet_products, current_row, 1, product_data['cost_input'], moderate_negative_data_format_products)
-                safe_write(negative_profit_sheet_products, current_row, 2, product_data['net_profit'], moderate_negative_data_format_products)
-                safe_write(negative_profit_sheet_products, current_row, 3, round(product_data['ratio'], 4), moderate_negative_data_format_products)
+        if ratio_greater_equal_20:
+            for product_data in ratio_greater_equal_20:
+                safe_write(profit_loss_sheet, current_row, 0, str(product_data['product']), moderate_negative_data_format_combined)
+                safe_write(profit_loss_sheet, current_row, 1, product_data['total_product_cost'], moderate_negative_data_format_combined)
+                safe_write(profit_loss_sheet, current_row, 2, product_data['net_profit'], moderate_negative_data_format_combined)
+                safe_write(profit_loss_sheet, current_row, 3, round(product_data['ratio'], 4), moderate_negative_data_format_combined)
                 current_row += 1
         else:
-            safe_write(negative_profit_sheet_products, current_row, 0, "No products found with ratio >= 0.2", moderate_negative_data_format_products)
+            safe_write(profit_loss_sheet, current_row, 0, "No products found with ratio >= 20", moderate_negative_data_format_combined)
             current_row += 1
         
         # Add summary for ratio >= 0.2
         current_row += 2
-        safe_write(negative_profit_sheet_products, current_row, 0, "SUMMARY - RATIO >= 0.2 (MODERATE)", moderate_negative_format_products)
+        safe_write(profit_loss_sheet, current_row, 0, "SUMMARY - RATIO >= 20 (MODERATE)", moderate_negative_format_combined)
         current_row += 1
         
-        total_moderate_products = len(ratio_greater_equal_02)
-        total_moderate_net_profit = sum([p['net_profit'] for p in ratio_greater_equal_02])
-        total_moderate_cost_input = sum([p['cost_input'] for p in ratio_greater_equal_02])
-        avg_moderate_ratio = sum([p['ratio'] for p in ratio_greater_equal_02]) / total_moderate_products if total_moderate_products > 0 else 0
+        total_moderate_products = len(ratio_greater_equal_20)
+        total_moderate_net_profit = sum([p['net_profit'] for p in ratio_greater_equal_20])
+        total_moderate_cost_input = sum([p['total_product_cost'] for p in ratio_greater_equal_20])
+        avg_moderate_ratio = sum([p['ratio'] for p in ratio_greater_equal_20]) / total_moderate_products if total_moderate_products > 0 else 0
         
-        safe_write(negative_profit_sheet_products, current_row, 0, f"Products with ratio >= 0.2: {total_moderate_products}", moderate_negative_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 1, 0, f"Total Net Profit (Moderate): {round(total_moderate_net_profit, 2)}", moderate_negative_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 2, 0, f"Total Product Cost Input (Moderate): {round(total_moderate_cost_input, 2)}", moderate_negative_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 3, 0, f"Average Ratio (Moderate): {round(avg_moderate_ratio, 4)}", moderate_negative_data_format_products)
+        safe_write(profit_loss_sheet, current_row, 0, f"Products with ratio >= 20: {total_moderate_products}", moderate_negative_data_format_combined)
+        safe_write(profit_loss_sheet, current_row + 1, 0, f"Total Net Profit (Moderate): {round(total_moderate_net_profit, 2)}", moderate_negative_data_format_combined)
+        safe_write(profit_loss_sheet, current_row + 2, 0, f"Total Product Cost Input (Moderate): {round(total_moderate_cost_input, 2)}", moderate_negative_data_format_combined)
+        safe_write(profit_loss_sheet, current_row + 3, 0, f"Average Ratio (Moderate): {round(avg_moderate_ratio, 4)}", moderate_negative_data_format_combined)
         
-        # OVERALL SUMMARY FOR ALL NEGATIVE PRODUCTS
-        current_row += 7
-        safe_write(negative_profit_sheet_products, current_row, 0, "OVERALL SUMMARY - ALL NEGATIVE PRODUCTS", negative_profit_header_format_products)
+        current_row += 7  # Add gap before overall summary
+        
+        # ==== SECTION 3: OVERALL SUMMARY ====
+        safe_write(profit_loss_sheet, current_row, 0, "OVERALL SUMMARY - ALL PRODUCTS", overall_summary_format)
         current_row += 1
         
-        total_negative_products = len(negative_products_with_ratio)
-        total_all_negative_net_profit = sum([p['net_profit'] for p in negative_products_with_ratio])
-        total_all_negative_cost_input = sum([p['cost_input'] for p in negative_products_with_ratio])
-        avg_all_negative_ratio = sum([p['ratio'] for p in negative_products_with_ratio]) / total_negative_products if total_negative_products > 0 else 0
+        # Overall summary headers
+        summary_headers = ["Category", "Count", "Total Net Profit", "Total Cost Input", "Average Net Profit", "Average Cost Input"]
+        for col_num, header in enumerate(summary_headers):
+            safe_write(profit_loss_sheet, current_row, col_num, header, overall_summary_format)
+        current_row += 1
         
-        safe_write(negative_profit_sheet_products, current_row, 0, f"Total Negative Products: {total_negative_products}", negative_profit_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 1, 0, f"Total Net Profit (All Negative): {round(total_all_negative_net_profit, 2)}", negative_profit_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 2, 0, f"Total Product Cost Input (All Negative): {round(total_all_negative_cost_input, 2)}", negative_profit_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 3, 0, f"Average Ratio (All Negative): {round(avg_all_negative_ratio, 4)}", negative_profit_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 4, 0, f"Critical Products (ratio < 0.2): {total_critical_products}", negative_profit_data_format_products)
-        safe_write(negative_profit_sheet_products, current_row + 5, 0, f"Moderate Products (ratio >= 0.2): {total_moderate_products}", moderate_negative_data_format_products)
+        # Calculate overall totals
+        total_all_products = len(product_net_profit_values)
+        total_all_net_profit = sum(product_net_profit_values.values())
+        total_all_cost_input = sum(product_cost_input_values.values())
+        avg_all_net_profit = total_all_net_profit / total_all_products if total_all_products > 0 else 0
+        avg_all_cost_input = total_all_cost_input / total_all_products if total_all_products > 0 else 0
         
-        # Set column widths for negative profit sheet
-        negative_profit_sheet_products.set_column(0, 0, 30)  # Product Name
-        negative_profit_sheet_products.set_column(1, 1, 25)  # Total Product Cost Input
-        negative_profit_sheet_products.set_column(2, 2, 20)  # Total Net Profit
-        negative_profit_sheet_products.set_column(3, 3, 25)  # Net Profit / Cost Input Ratio
+        # Write overall summary data
+        summary_data = [
+            ("Positive Products", total_positive_products, total_positive_net_profit, total_positive_cost_input, avg_positive_net_profit, avg_positive_cost_input, positive_profit_data_format),
+            ("Critical Negative (ratio < 20)", total_critical_products, total_critical_net_profit, total_critical_cost_input, avg_critical_ratio, total_critical_cost_input / total_critical_products if total_critical_products > 0 else 0, negative_profit_data_format_combined),
+            ("Moderate Negative (ratio >= 20)", total_moderate_products, total_moderate_net_profit, total_moderate_cost_input, avg_moderate_ratio, total_moderate_cost_input / total_moderate_products if total_moderate_products > 0 else 0, moderate_negative_data_format_combined),
+            ("ALL PRODUCTS", total_all_products, total_all_net_profit, total_all_cost_input, avg_all_net_profit, avg_all_cost_input, overall_summary_format)
+        ]
+        
+        for category, count, net_profit, cost_input, avg_net_profit, avg_cost_input, format_style in summary_data:
+            safe_write(profit_loss_sheet, current_row, 0, category, format_style)
+            safe_write(profit_loss_sheet, current_row, 1, count, format_style)
+            safe_write(profit_loss_sheet, current_row, 2, round(net_profit, 2), format_style)
+            safe_write(profit_loss_sheet, current_row, 3, round(cost_input, 2), format_style)
+            safe_write(profit_loss_sheet, current_row, 4, round(avg_net_profit, 2), format_style)
+            safe_write(profit_loss_sheet, current_row, 5, round(avg_cost_input, 2), format_style)
+            current_row += 1
+        
+        # Set column widths for combined profit and loss sheet
+        profit_loss_sheet.set_column(0, 0, 30)  # Product Name / Category
+        profit_loss_sheet.set_column(1, 1, 25)  # Total Product Cost Input / Count
+        profit_loss_sheet.set_column(2, 2, 20)  # Total Net Profit
+        profit_loss_sheet.set_column(3, 3, 25)  # Net Profit / Cost Input Ratio / Total Cost Input
+        profit_loss_sheet.set_column(4, 4, 20)  # Average Net Profit
+        profit_loss_sheet.set_column(5, 5, 20)  # Average Cost Input
         
     return output.getvalue()
 
@@ -4149,11 +4242,6 @@ if campaign_files or shopify_files or old_merged_files:
         unique_dates = df_shopify['Date'].unique()
         unique_dates = [str(d) for d in unique_dates if pd.notna(d) and str(d).strip() != '']
         st.info(f"📅 Found {len(unique_dates)} unique dates: {', '.join(sorted(unique_dates)[:5])}{'...' if len(unique_dates) > 5 else ''}")
-
-
-
-
-
 
 
 
