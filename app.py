@@ -3486,7 +3486,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         # Format for last date negative campaigns
         last_date_header_format = workbook.add_format({
             "bold": True, "align": "center", "valign": "vcenter",
-            "fg_color": "#9932CC", "font_name": "Calibri", "font_size": 11
+            "fg_color": "#559BD8", "font_name": "Calibri", "font_size": 11
         })
         last_date_data_format = workbook.add_format({
             "align": "left", "valign": "vcenter",
@@ -3652,7 +3652,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         positive_campaigns = []  # Net Profit % >= 0% (0% and above)
         
         for campaign in all_negative_campaigns:
-            if campaign['Net Profit %'] <= -1:
+            if campaign['Net Profit %'] <= -10:
                 severe_negative_campaigns.append(campaign)
             elif campaign['Net Profit %'] < 0:  # > -1% and < 0%
                 moderate_negative_campaigns.append(campaign)
@@ -3671,7 +3671,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         severe_headers = ["Product", "Campaign Name", "CPP", "BE", "Amount Spent (USD)", "Net Profit %", "Comment","Total Dates", "Days Checked", 
                          "Days with Negative Net Profit %", "Negative Net Profit Dates",  "Reason"]
 
-        safe_write(negative_profit_sheet, current_row, 0, "CAMPAIGNS WITH SEVERE NEGATIVE NET PROFIT % (-100% TO -1%)", negative_profit_header_format)
+        safe_write(negative_profit_sheet, current_row, 0, "CAMPAIGNS WITH SEVERE NEGATIVE NET PROFIT % (-100% TO -10%)", negative_profit_header_format)
         current_row += 1
 
         for col_num, header in enumerate(severe_headers):
@@ -3705,13 +3705,13 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(negative_profit_sheet, current_row, 11, campaign['Reason'], negative_profit_data_format)
                 current_row += 1
         else:
-            safe_write(negative_profit_sheet, current_row, 0, f"No campaigns found with severe negative net profit % (-100% to -1%)", negative_profit_data_format)
+            safe_write(negative_profit_sheet, current_row, 0, f"No campaigns found with severe negative net profit % (-100% to -10%)", negative_profit_data_format)
             current_row += 1
 
         # Add summary for severe negative campaigns
         current_row += 2
         safe_write(negative_profit_sheet, current_row, 0, "SUMMARY - SEVERE NEGATIVE CAMPAIGNS", negative_profit_header_format)
-        safe_write(negative_profit_sheet, current_row + 1, 0, f"Campaigns with severe negative net profit % (-100% to -1%): {len(severe_negative_campaigns)}", negative_profit_data_format)
+        safe_write(negative_profit_sheet, current_row + 1, 0, f"Campaigns with severe negative net profit % (-100% to -10%): {len(severe_negative_campaigns)}", negative_profit_data_format)
         current_row += 3
 
         # ==== PART 2: MODERATE NEGATIVE CAMPAIGNS (-1% to 0%, excluding 0%) ====
@@ -3721,7 +3721,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         moderate_headers = ["Product", "Campaign Name", "CPP", "BE", "Amount Spent (USD)", "Net Profit %", "Total Dates", "Days Checked", 
                            "Days with Negative Net Profit %", "Negative Net Profit Dates", "Reason"]
 
-        safe_write(negative_profit_sheet, current_row, 0, "CAMPAIGNS WITH MODERATE NEGATIVE NET PROFIT % (-1% TO 0%, EXCLUDING 0%)", moderate_negative_header_format)
+        safe_write(negative_profit_sheet, current_row, 0, "CAMPAIGNS WITH MODERATE NEGATIVE NET PROFIT % (-10% TO 0%, EXCLUDING 0%)", moderate_negative_header_format)
         current_row += 1
 
         for col_num, header in enumerate(moderate_headers):
@@ -3744,13 +3744,13 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(negative_profit_sheet, current_row, 10, campaign['Reason'], moderate_negative_data_format)
                 current_row += 1
         else:
-            safe_write(negative_profit_sheet, current_row, 0, f"No campaigns found with moderate negative net profit % (-1% to 0%, excluding 0%)", moderate_negative_data_format)
+            safe_write(negative_profit_sheet, current_row, 0, f"No campaigns found with moderate negative net profit % (-10% to 0%, excluding 0%)", moderate_negative_data_format)
             current_row += 1
 
         # Add summary for moderate negative campaigns
         current_row += 2
         safe_write(negative_profit_sheet, current_row, 0, "SUMMARY - MODERATE NEGATIVE CAMPAIGNS", moderate_negative_header_format)
-        safe_write(negative_profit_sheet, current_row + 1, 0, f"Campaigns with moderate negative net profit % (-1% to 0%, excluding 0%): {len(moderate_negative_campaigns)}", moderate_negative_data_format)
+        safe_write(negative_profit_sheet, current_row + 1, 0, f"Campaigns with moderate negative net profit % (-10% to 0%, excluding 0%): {len(moderate_negative_campaigns)}", moderate_negative_data_format)
         
         # ==== PART 3: POSITIVE CAMPAIGNS (0% AND ABOVE) ====
         current_row += 5  # Add gap between tables
@@ -4326,6 +4326,5 @@ if campaign_files or shopify_files or old_merged_files:
         unique_dates = df_shopify['Date'].unique()
         unique_dates = [str(d) for d in unique_dates if pd.notna(d) and str(d).strip() != '']
         st.info(f"📅 Found {len(unique_dates)} unique dates: {', '.join(sorted(unique_dates)[:5])}{'...' if len(unique_dates) > 5 else ''}")
-
 
 
