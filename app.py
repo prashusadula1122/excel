@@ -3585,8 +3585,8 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         current_row = 0
         
         # Headers for severe negative campaigns (with Comment column)
-        severe_headers = ["Product", "Campaign Name", "CPP", "BE", "Amount Spent (USD)", "Net Profit %", "Total Dates", "Days Checked", 
-                         "Days with Negative Net Profit %", "Negative Net Profit Dates", "Comment", "Reason"]
+        severe_headers = ["Product", "Campaign Name", "CPP", "BE", "Amount Spent (USD)", "Net Profit %", "Comment","Total Dates", "Days Checked", 
+                         "Days with Negative Net Profit %", "Negative Net Profit Dates",  "Reason"]
 
         safe_write(negative_profit_sheet, current_row, 0, "CAMPAIGNS WITH SEVERE NEGATIVE NET PROFIT % (-100% TO -1%)", negative_profit_header_format)
         current_row += 1
@@ -3613,11 +3613,12 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(negative_profit_sheet, current_row, 3, campaign['BE'], negative_profit_data_format)
                 safe_write(negative_profit_sheet, current_row, 4, campaign['Amount Spent (USD)'], negative_profit_data_format)
                 safe_write(negative_profit_sheet, current_row, 5, campaign['Net Profit %'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 6, campaign['Total Dates'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 7, campaign['Days Checked'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 8, campaign['Days with Negative Net Profit %'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 9, campaign['Negative Net Profit Dates'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 10, comment, negative_profit_data_format)  # NEW: Comment column
+                safe_write(negative_profit_sheet, current_row, 6, comment, negative_profit_data_format)  # NEW: Comment column
+
+                safe_write(negative_profit_sheet, current_row, 7, campaign['Total Dates'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 8, campaign['Days Checked'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 9, campaign['Days with Negative Net Profit %'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 10, campaign['Negative Net Profit Dates'], negative_profit_data_format)
                 safe_write(negative_profit_sheet, current_row, 11, campaign['Reason'], negative_profit_data_format)
                 current_row += 1
         else:
@@ -4037,7 +4038,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         current_row += 1
         
         # Headers with ratio column
-        negative_headers_with_ratio = ["Product Name", "Total Total Product Cost", "Total Net Profit", "Net Profit / Total Product Cost Ratio"]
+        negative_headers_with_ratio = ["Product Name", "Total Total Product Cost", "Total Net Loss", "Net Profit / Total Product Cost Ratio"]
 
         
         for col_num, header in enumerate(negative_headers_with_ratio):
@@ -4067,7 +4068,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         avg_critical_ratio = sum([p['ratio'] for p in ratio_less_than_20]) / total_critical_products if total_critical_products > 0 else 0
         
         safe_write(profit_loss_sheet, current_row, 0, f"Products with ratio < 20: {total_critical_products}", negative_profit_data_format_combined)
-        safe_write(profit_loss_sheet, current_row + 1, 0, f"Total Net Profit (Critical): {round(total_critical_net_profit, 2)}", negative_profit_data_format_combined)
+        safe_write(profit_loss_sheet, current_row + 1, 0, f"Total Net Loss (Critical): {round(total_critical_net_profit, 2)}", negative_profit_data_format_combined)
         safe_write(profit_loss_sheet, current_row + 2, 0, f"Total Product Cost Input (Critical): {round(total_critical_cost_input, 2)}", negative_profit_data_format_combined)
         safe_write(profit_loss_sheet, current_row + 3, 0, f"Average Ratio (Critical): {round(avg_critical_ratio, 4)}", negative_profit_data_format_combined)
         
@@ -4105,7 +4106,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         avg_moderate_ratio = sum([p['ratio'] for p in ratio_greater_equal_20]) / total_moderate_products if total_moderate_products > 0 else 0
         
         safe_write(profit_loss_sheet, current_row, 0, f"Products with ratio >= 20: {total_moderate_products}", moderate_negative_data_format_combined)
-        safe_write(profit_loss_sheet, current_row + 1, 0, f"Total Net Profit (Moderate): {round(total_moderate_net_profit, 2)}", moderate_negative_data_format_combined)
+        safe_write(profit_loss_sheet, current_row + 1, 0, f"Total Net Loss (Moderate): {round(total_moderate_net_profit, 2)}", moderate_negative_data_format_combined)
         safe_write(profit_loss_sheet, current_row + 2, 0, f"Total Product Cost Input (Moderate): {round(total_moderate_cost_input, 2)}", moderate_negative_data_format_combined)
         safe_write(profit_loss_sheet, current_row + 3, 0, f"Average Ratio (Moderate): {round(avg_moderate_ratio, 4)}", moderate_negative_data_format_combined)
         
@@ -4242,6 +4243,5 @@ if campaign_files or shopify_files or old_merged_files:
         unique_dates = df_shopify['Date'].unique()
         unique_dates = [str(d) for d in unique_dates if pd.notna(d) and str(d).strip() != '']
         st.info(f"📅 Found {len(unique_dates)} unique dates: {', '.join(sorted(unique_dates)[:5])}{'...' if len(unique_dates) > 5 else ''}")
-
 
 
