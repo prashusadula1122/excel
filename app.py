@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 import pandas as pd
 from io import BytesIO
 import re
@@ -2264,6 +2264,16 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
             "align": "left", "valign": "vcenter",
             "fg_color": "#D9E1F2", "font_name": "Calibri", "font_size": 11
         })
+        # NEW: Exclusion table formats
+        exclusion_header_format = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#FF9999", "font_name": "Calibri", "font_size": 11
+        })
+        exclusion_data_format = workbook.add_format({
+            "align": "left", "valign": "vcenter",
+            "fg_color": "#FFE6E6", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
+        })
 
         # Check if we have dates
         has_dates = 'Date' in df.columns
@@ -2362,6 +2372,40 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         # Use filtered_df for all main sheet calculations
         df_main = filtered_df
 
+        # NEW: Check for products with zero product cost input and zero delivery rate
+        excluded_products = []
+        valid_products = []
+        
+        for product, product_df in df_main.groupby("Product"):
+            # Check if product has zero cost input and zero delivery rate across all dates
+            has_valid_cost = False
+            has_valid_delivery_rate = False
+            
+            for date in unique_dates:
+                date_cost = product_date_cost_inputs.get(product, {}).get(date, 0)
+                date_delivery_rate = product_date_delivery_rates.get(product, {}).get(date, 0)
+                
+                if date_cost > 0:
+                    has_valid_cost = True
+                if date_delivery_rate > 0:
+                    has_valid_delivery_rate = True
+            
+            # If both cost input and delivery rate are zero, exclude from main calculations
+            if not has_valid_cost and not has_valid_delivery_rate:
+                total_amount_spent = product_df["Amount Spent (USD)"].sum()
+                total_purchases = product_df["Purchases"].sum()
+                campaign_count = len(product_df.groupby("Campaign Name"))
+                
+                excluded_products.append({
+                    'Product': str(product),
+                    'Campaign Count': campaign_count,
+                    'Total Amount Spent (USD)': round(total_amount_spent, 2),
+                    'Total Purchases': int(total_purchases),
+                    'Reason': 'Product cost input = 0 and delivery rate = 0'
+                })
+            else:
+                valid_products.append((product, product_df))
+
         # Write headers (skip separator columns)
         for col_num, col_name in enumerate(all_columns):
             if col_name.startswith("SEPARATOR_"):
@@ -2423,13 +2467,13 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
 
         # Grand total row
         grand_total_row_idx = 1
-        safe_write(worksheet, grand_total_row_idx, 0, "ALL PRODUCTS", grand_total_format)
+        safe_write(worksheet, grand_total_row_idx, 0, "ALL VALID PRODUCTS", grand_total_format)
         safe_write(worksheet, grand_total_row_idx, 1, "GRAND TOTAL", grand_total_format)
 
         row = grand_total_row_idx + 1
         product_total_rows = []
 
-        # NEW: Pre-calculate product-level delivery rates AND average prices for Total columns
+        # NEW: Pre-calculate product-level delivery rates AND average prices for Total columns (ONLY FOR VALID PRODUCTS)
         product_total_delivery_rates = {}
         product_total_avg_prices = {}
         
@@ -2442,9 +2486,9 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         # NEW: STORE PRODUCT COST INPUT VALUES - for Profit and Loss Products sheet
         product_cost_input_values = {}
         
-        # CHANGED: Calculate total purchases per product for sorting AND pre-calculate other values
+        # CHANGED: Calculate total purchases per product for sorting AND pre-calculate other values (ONLY FOR VALID PRODUCTS)
         product_purchase_totals = []
-        for product, product_df in df_main.groupby("Product"):
+        for product, product_df in valid_products:
             total_purchases = product_df.get("Purchases", 0).sum() if "Purchases" in product_df.columns else 0
             
             # Calculate weighted average delivery rate for this product across all dates
@@ -2486,7 +2530,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         # CHANGED: Sort products by total purchases in descending order (highest purchases first)
         product_purchase_totals.sort(key=lambda x: x[2], reverse=True)
 
-        # CHANGED: Group by product and restructure data - SORT BY TOTAL PURCHASES DESCENDING
+        # CHANGED: Group by product and restructure data - SORT BY TOTAL PURCHASES DESCENDING (ONLY VALID PRODUCTS)
         for product, product_df, total_purchases_for_product in product_purchase_totals:
             product_total_row_idx = row
             product_total_rows.append(product_total_row_idx)
@@ -3071,7 +3115,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                             product_total_format
                         )
 
-        # Calculate grand totals using INDIVIDUAL PRODUCT TOTAL ROWS ONLY (FIXED: Use weighted average for delivery rate AND average price)
+        # Calculate grand totals using INDIVIDUAL PRODUCT TOTAL ROWS ONLY (FIXED: Use weighted average for delivery rate AND average price) (ONLY VALID PRODUCTS)
         if product_total_rows:
             # Base columns for grand total
             total_amount_spent_col_idx = all_columns.index("Total_Amount Spent (USD)")
@@ -3097,7 +3141,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 grand_total_format
             )
             
-            # BE (Amount Spent Zero Net Profit % per purchases) for grand total - FIXED: Use Purchases
+            # BE (Amount Spent Zero Net Profit % per purchases) for grand total - FIXED: Use Purchases (ONLY VALID PRODUCTS)
             total_net_revenue_col_idx = all_columns.index("Total_Net Revenue")
             total_shipping_cost_col_idx = all_columns.index("Total_Total Shipping Cost")
             total_operational_cost_col_idx = all_columns.index("Total_Total Operational Cost")
@@ -3119,14 +3163,14 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 grand_total_format
             )
             
-            # Add remark for grand total if total amount spent USD = 0 (using filtered data)
-            grand_total_amount_spent = df_main.get("Amount Spent (USD)", 0).sum() if "Amount Spent (USD)" in df_main.columns else 0
+            # Add remark for grand total if total amount spent USD = 0 (using filtered data for valid products only)
+            grand_total_amount_spent = sum([product_df["Amount Spent (USD)"].sum() for _, product_df in valid_products])
             if grand_total_amount_spent == 0:
                 safe_write(worksheet, grand_total_row_idx, all_columns.index("Remark"), "Total Amount Spent USD = 0", grand_total_format)
             else:
                 safe_write(worksheet, grand_total_row_idx, all_columns.index("Remark"), "", grand_total_format)
             
-            # Date-specific and total columns for grand total using INDIVIDUAL PRODUCT ROWS (FIXED: Weighted average for delivery rate AND average price)
+            # Date-specific and total columns for grand total using INDIVIDUAL PRODUCT ROWS (FIXED: Weighted average for delivery rate AND average price) (ONLY VALID PRODUCTS)
             for date in unique_dates:
                 for metric in date_metrics:
                     col_idx = all_columns.index(f"{date}_{metric}")
@@ -3193,7 +3237,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                             grand_total_format
                         )
             
-            # Total columns for grand total using INDIVIDUAL PRODUCT TOTAL ROWS (FIXED: Weighted average for delivery rate AND average price)
+            # Total columns for grand total using INDIVIDUAL PRODUCT TOTAL ROWS (FIXED: Weighted average for delivery rate AND average price) (ONLY VALID PRODUCTS)
             total_purchases_col_idx = all_columns.index("Total_Purchases")
             
             for metric in date_metrics:
@@ -3260,8 +3304,47 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                         grand_total_format
                     )
 
+        # NEW: Add excluded products table at the end of the sheet
+        if excluded_products:
+            # Add some spacing
+            exclusion_start_row = row + 3
+            
+            # Title for exclusion table
+            safe_write(worksheet, exclusion_start_row, 0, "PRODUCTS EXCLUDED FROM CALCULATIONS", exclusion_header_format)
+            safe_write(worksheet, exclusion_start_row + 1, 0, "These products have product cost input = 0 and delivery rate = 0", exclusion_data_format)
+            
+            # Headers for exclusion table
+            exclusion_headers = ["Product Name", "Campaign Count", "Total Amount Spent (USD)", "Total Purchases", "Reason"]
+            exclusion_header_row = exclusion_start_row + 3
+            
+            for col_num, header in enumerate(exclusion_headers):
+                safe_write(worksheet, exclusion_header_row, col_num, header, exclusion_header_format)
+            
+            # Write excluded products data
+            current_exclusion_row = exclusion_header_row + 1
+            for excluded_product in excluded_products:
+                safe_write(worksheet, current_exclusion_row, 0, excluded_product['Product'], exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row, 1, excluded_product['Campaign Count'], exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row, 2, excluded_product['Total Amount Spent (USD)'], exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row, 3, excluded_product['Total Purchases'], exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row, 4, excluded_product['Reason'], exclusion_data_format)
+                current_exclusion_row += 1
+            
+            # Add summary for excluded products
+            summary_row = current_exclusion_row + 1
+            safe_write(worksheet, summary_row, 0, "EXCLUSION SUMMARY", exclusion_header_format)
+            safe_write(worksheet, summary_row + 1, 0, f"Total excluded products: {len(excluded_products)}", exclusion_data_format)
+            
+            total_excluded_amount = sum(p['Total Amount Spent (USD)'] for p in excluded_products)
+            total_excluded_purchases = sum(p['Total Purchases'] for p in excluded_products)
+            total_excluded_campaigns = sum(p['Campaign Count'] for p in excluded_products)
+            
+            safe_write(worksheet, summary_row + 2, 0, f"Total excluded amount spent: ${total_excluded_amount:,.2f}", exclusion_data_format)
+            safe_write(worksheet, summary_row + 3, 0, f"Total excluded purchases: {total_excluded_purchases:,}", exclusion_data_format)
+            safe_write(worksheet, summary_row + 4, 0, f"Total excluded campaigns: {total_excluded_campaigns}", exclusion_data_format)
+
         # Freeze panes to keep base columns visible when scrolling
-        worksheet.freeze_panes(2, len(base_columns))  # Freeze header and base columns
+        worksheet.freeze_panes(2, len(base_columns))
         
         # ==== NEW SHEET: Unmatched Campaigns ====
         unmatched_sheet = workbook.add_worksheet("Unmatched Campaigns")
