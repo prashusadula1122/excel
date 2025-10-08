@@ -82,6 +82,21 @@ def standardize_campaign_columns(df):
             df = df.drop(columns=[date_col])
         st.info(f"📅 Found date column: {date_col}")
     
+    # Find and preserve Delivery status column
+    delivery_status_col = None
+    for col in df.columns:
+      if 'delivery' in col.lower() and 'status' in col.lower():
+        delivery_status_col = col
+        break
+
+    if delivery_status_col:
+      df['Delivery status'] = df[delivery_status_col]
+      if delivery_status_col != 'Delivery status':
+        df = df.drop(columns=[delivery_status_col])
+      st.info(f"📝 Found Delivery status column: {delivery_status_col}")
+    
+    
+    
     # Find purchases/results column
     purchases_col = None
     for col in df.columns:
@@ -167,11 +182,12 @@ def merge_campaign_files(files):
     if all(col in merged_df.columns for col in required_cols):
         # Check if Purchases column exists
         has_purchases = "Purchases" in merged_df.columns
-        
+        has_delivery_status = "Delivery status" in merged_df.columns  # ADD THIS LINE
         agg_dict = {"Amount spent (USD)": "sum"}
         if has_purchases:
             agg_dict["Purchases"] = "sum"
-        
+        if has_delivery_status:  # ADD THESE LINES
+            agg_dict["Delivery status"] = "first"  # Keep first delivery status value
         merged_df = merged_df.groupby(group_cols, as_index=False).agg(agg_dict)
     
     st.success(f"✅ Successfully merged {len(files)} campaign files:")
@@ -369,7 +385,7 @@ if campaign_files:
         final_campaign_data = []
         has_purchases = "Purchases" in df_campaign.columns
         has_dates = 'Date' in df_campaign.columns
-
+        has_delivery_status = 'Delivery status' in df_campaign.columns
         for product, product_campaigns in df_campaign.groupby("Canonical Product"):
             for _, campaign in product_campaigns.iterrows():
                 row = {
@@ -383,6 +399,8 @@ if campaign_files:
                     row["Purchases"] = campaign.get("Purchases", 0)
                 if has_dates:
                     row["Date"] = campaign.get("Date", "")
+                if has_delivery_status:
+                    row["Delivery status"] = campaign.get("Delivery status", "")
                 final_campaign_data.append(row)
 
         df_final_campaign = pd.DataFrame(final_campaign_data)
@@ -1211,6 +1229,8 @@ def convert_shopify_to_excel_with_date_columns_fixed(df):
                     data_cols_found += 1
                 if data_cols_found < 12:
                     end_col += 1
+                    
+                    
             
             # Set column grouping only for data columns (skip separators)
             if end_col < total_columns:
@@ -1351,6 +1371,7 @@ def convert_shopify_to_excel_with_date_columns_fixed(df):
                         
                         # Actual data for this date
                         net_items = row_data.get("Net items sold", 0) or 0
+                        
                         avg_price = row_data.get("Product variant price", 0) or 0
                         delivery_rate = row_data.get("Delivery Rate", 0) or 0
                         product_cost_input = row_data.get("Product Cost (Input)", 0) or 0
@@ -2294,7 +2315,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         base_columns = ["Product Name", "Campaign Name", "Total Amount Spent (USD)", "Total Purchases", "CPP", "BE"]
         
         # Define metrics that will be repeated for each date (13 metrics = 13 columns per date)
-        date_metrics = ["Avg Price", "Delivery Rate", "Product Cost Input", "Amount Spent (USD)", "Purchases", "Cost Per Purchase (USD)", 
+        date_metrics = ["Delivery status","Avg Price", "Delivery Rate", "Product Cost Input", "Amount Spent (USD)", "Purchases", "Cost Per Purchase (USD)", 
                        "Delivered Orders", "Net Revenue", "Total Product Cost", "Total Shipping Cost", 
                        "Total Operational Cost", "Net Profit", "Net Profit (%)"]
         
@@ -2429,10 +2450,10 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 
             data_cols_found = 0
             end_col = start_col
-            while end_col < total_columns and data_cols_found < 13:
+            while end_col < total_columns and data_cols_found < 14:
                 if not all_columns[end_col].startswith("SEPARATOR_"):
                     data_cols_found += 1
-                if data_cols_found < 13:
+                if data_cols_found < 14:
                     end_col += 1
             
             if end_col < total_columns:
@@ -2614,7 +2635,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                     total_operational_cost_col_idx = all_columns.index(f"{date}_Total Operational Cost")
                     net_profit_col_idx = all_columns.index(f"{date}_Net Profit")
                     net_profit_percent_col_idx = all_columns.index(f"{date}_Net Profit (%)")
-                    
+                    delivery_status_col_idx = all_columns.index(f"{date}_Delivery status")
                     # Cell references for this date
                     avg_price_ref = f"{xl_col_to_name(avg_price_col_idx)}{excel_row}"
                     delivery_rate_ref = f"{xl_col_to_name(delivery_rate_col_idx)}{excel_row}"
@@ -2653,10 +2674,24 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                         purchases = row_data.get("Purchases", 0) or 0
                         safe_write(worksheet, campaign_row_idx, purchases_col_idx, purchases, campaign_format)
                         
+                        # Delivery status - from campaign data
+                        delivery_status_raw = row_data.get("Delivery status", "")
+                        if pd.notna(delivery_status_raw) and str(delivery_status_raw).strip() != "":
+                                delivery_status_normalized = str(delivery_status_raw).strip().lower()
+        # Consider "recently completed" and "inactive" as the same (Inactive)
+                                if "active" in delivery_status_normalized and "inactive" not in delivery_status_normalized:
+                                     delivery_status = "Active"
+                                else:
+                                     delivery_status = "Inactive"
+                        else:
+                                delivery_status = ""
+                        safe_write(worksheet, campaign_row_idx, delivery_status_col_idx, delivery_status, campaign_format)
+                        
                     else:
                         # No data for this date
                         safe_write(worksheet, campaign_row_idx, amount_spent_col_idx, 0, campaign_format)
                         safe_write(worksheet, campaign_row_idx, purchases_col_idx, 0, campaign_format)
+                        safe_write(worksheet, campaign_row_idx, delivery_status_col_idx, "", campaign_format)  # ADD THIS LINE
                     
                     # FORMULAS for calculated fields
                     
@@ -3449,6 +3484,12 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         unmatched_sheet.set_column(7, 7, 25)  # Dates Covered
         unmatched_sheet.set_column(8, 8, 40)  # Reason
         
+       
+
+        
+        
+        
+        
         # ==== RESTRUCTURED SHEET: Negative Net Profit Campaigns ====
         # Use the filtered df_main for negative profit analysis to ensure consistency
         negative_profit_sheet = workbook.add_worksheet("Negative Net Profit Campaigns")
@@ -3523,7 +3564,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         # Calculate selected_days threshold (default: len(unique_dates) // 2, minimum 1)
         if selected_days is None:
             selected_days = max(1, len(unique_dates) // 2)
-
+        
         # Analyze campaigns for negative net profit percentage (using filtered data)
         all_negative_campaigns = []
         current_row = 0
@@ -3610,26 +3651,69 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                     # Calculate overall Net Profit % for this campaign (using Total columns logic)
                     # Get the campaign's total net profit percentage from the main sheet calculation
                     campaign_net_profit_percentage = 0
-                    if total_amount_spent_usd > 0 or total_purchases > 0:
-                        # Calculate using the same logic as Total_Net Profit (%) in main sheet
-                        product_avg_price = product_total_avg_prices.get(product, 0)
-                        product_delivery_rate = product_total_delivery_rates.get(product, 0)
-                        
-                        if product_avg_price > 0:
-                            calc_purchases_total = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) else total_purchases
-                            delivery_rate_total = product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate
-                            
-                            # Calculate total components
-                            total_delivered_orders = calc_purchases_total * delivery_rate_total
-                            total_net_revenue = total_delivered_orders * product_avg_price
-                            total_product_cost_calc = total_delivered_orders * sum(product_date_cost_inputs.get(product, {}).values()) / len(product_date_cost_inputs.get(product, {})) if product_date_cost_inputs.get(product) else 0
-                            total_shipping_cost_calc = calc_purchases_total * shipping_rate
-                            total_operational_cost_calc = calc_purchases_total * operational_rate
-                            total_net_profit = total_net_revenue - (total_amount_spent_usd * 100) - total_shipping_cost_calc - total_operational_cost_calc - total_product_cost_calc
-                            
-                            denominator_total = product_avg_price * delivery_rate_total * calc_purchases_total
-                            campaign_net_profit_percentage = (total_net_profit / denominator_total * 100) if denominator_total > 0 else 0
+                    total_net_profit_sum = 0  # Sum of day-by-day net profits
                     
+                    # Get product-level values
+                    product_avg_price =  round(product_total_avg_prices.get(product, 0),2)
+                    product_delivery_rate =  round(product_total_delivery_rates.get(product, 0),2)
+                    
+                    if product_avg_price > 0:
+                        # Calculate net profit by summing day-by-day (matching debug sheet)
+                        for date in campaign_dates:
+                            date_data = campaign_group[campaign_group['Date'].astype(str) == date]
+                            if not date_data.empty:
+                                row_data = date_data.iloc[0]
+                                
+                                # Get day-specific data
+                                date_amount_spent =  round(row_data.get("Amount Spent (USD)", 0),2) or 0
+                                date_purchases =  round(row_data.get("Purchases", 0),2) or 0
+                                
+                                # Get day-wise lookup data
+                                date_avg_price =  round(product_date_avg_prices.get(product, {}).get(date, 0),2)
+                                date_delivery_rate =  round(product_date_delivery_rates.get(product, {}).get(date, 0),2)
+                                date_product_cost =  round(product_date_cost_inputs.get(product, {}).get(date, 0),2)
+                                
+                                # Calculate for this specific date (SAME AS DEBUG SHEET)
+                                calc_purchases_date =  round(date_purchases,2)  # No special handling for zero here
+                                delivery_rate_date =  round(date_delivery_rate / 100 if date_delivery_rate > 1 else date_delivery_rate,2)
+                                
+                                delivered_orders =  round(calc_purchases_date * delivery_rate_date,2)
+                                net_revenue =  round(delivered_orders * date_avg_price,2)
+                                total_product_cost_date =  round(delivered_orders * date_product_cost,2)
+                                total_shipping_cost_date =  round(calc_purchases_date * shipping_rate,2)
+                                total_operational_cost_date =  round(calc_purchases_date * operational_rate,2)
+                                
+                                # Net profit for THIS DATE
+                                date_net_profit =  round(net_revenue - (date_amount_spent * 100) - total_shipping_cost_date - total_operational_cost_date - total_product_cost_date,2)
+                                
+                                # ADD to total
+                                total_net_profit_sum +=  round(date_net_profit,2)
+                        
+                        # Now calculate Net Profit % = Total Net Profit / (Avg Price * Total Purchases * Delivery Rate) * 100
+                        calc_purchases_total = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) else total_purchases
+                        delivery_rate_total = product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate
+                        
+                        numerator_total = round(total_net_profit_sum, 2)
+                        denominator_total = round(product_avg_price * calc_purchases_total * delivery_rate_total, 2)
+                        campaign_net_profit_percentage = round((numerator_total / denominator_total * 100), 2) if denominator_total > 0 else 0
+                    
+                    last_date = campaign_dates[-1] if campaign_dates else None
+                    last_day_delivery_status = ""
+                    
+                    if last_date:
+                       last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
+                       if not last_date_data.empty:
+                          row_data = last_date_data.iloc[0]
+                          delivery_status_raw = row_data.get("Delivery status", "")
+                          if pd.notna(delivery_status_raw) and str(delivery_status_raw).strip() != "":
+                             delivery_status_normalized = str(delivery_status_raw).strip().lower()
+                        # Consider "recently completed" and "inactive" as the same (Inactive)
+                          if "active" in delivery_status_normalized and "inactive" not in delivery_status_normalized:
+                            last_day_delivery_status = "Active"
+                          else:
+                            last_day_delivery_status = "Inactive"
+                            
+                            
                     negative_campaign = {
                         'Product': str(product),
                         'Campaign Name': str(campaign_name),
@@ -3640,6 +3724,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                         'BE': be,  # FIXED: Use the correct BE value from main sheet
                         'Amount Spent (USD)': round(total_amount_spent_usd, 2),  # NEW: Added amount spent
                         'Net Profit %': round(campaign_net_profit_percentage, 2),  # NEW: Added Net Profit %
+                        'Last Day Delivery Status': last_day_delivery_status,
                         'Negative Net Profit Dates': formatted_dates_str,
                         'Reason': f"Has {len(negative_profit_data)} negative net profit % days out of {len(campaign_dates)} total days (threshold: {selected_days})"
                     }
@@ -3668,7 +3753,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         current_row = 0
         
         # Headers for severe negative campaigns (with Comment column)
-        severe_headers = ["Product", "Campaign Name", "CPP", "BE", "Amount Spent (USD)", "Net Profit %", "Comment","Total Dates", "Days Checked", 
+        severe_headers = ["Product", "Campaign Name", "CPP", "BE", "Amount Spent (USD)", "Net Profit %","Last Day Delivery Status", "Comment","Total Dates", "Days Checked", 
                          "Days with Negative Net Profit %", "Negative Net Profit Dates",  "Reason"]
 
         safe_write(negative_profit_sheet, current_row, 0, "CAMPAIGNS WITH SEVERE NEGATIVE NET PROFIT % (-100% TO -10%)", negative_profit_header_format)
@@ -3696,13 +3781,14 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(negative_profit_sheet, current_row, 3, campaign['BE'], negative_profit_data_format)
                 safe_write(negative_profit_sheet, current_row, 4, campaign['Amount Spent (USD)'], negative_profit_data_format)
                 safe_write(negative_profit_sheet, current_row, 5, campaign['Net Profit %'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 6, comment, negative_profit_data_format)  # NEW: Comment column
-
-                safe_write(negative_profit_sheet, current_row, 7, campaign['Total Dates'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 8, campaign['Days Checked'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 9, campaign['Days with Negative Net Profit %'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 10, campaign['Negative Net Profit Dates'], negative_profit_data_format)
-                safe_write(negative_profit_sheet, current_row, 11, campaign['Reason'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 6, campaign['Last Day Delivery Status'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 7, comment, negative_profit_data_format)  # NEW: Comment column
+                
+                safe_write(negative_profit_sheet, current_row, 8, campaign['Total Dates'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 9, campaign['Days Checked'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 10, campaign['Days with Negative Net Profit %'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 11, campaign['Negative Net Profit Dates'], negative_profit_data_format)
+                safe_write(negative_profit_sheet, current_row, 12, campaign['Reason'], negative_profit_data_format)
                 current_row += 1
         else:
             safe_write(negative_profit_sheet, current_row, 0, f"No campaigns found with severe negative net profit % (-100% to -10%)", negative_profit_data_format)
@@ -3845,25 +3931,56 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                     be = product_be_values.get(product, 0)
                     
                     # Calculate overall Net Profit % for this campaign (same as first tables)
+                    # FIXED: Calculate Net Profit % by summing day-by-day net profits (matching debug sheet)
                     campaign_net_profit_percentage = 0
-                    if total_amount_spent_usd > 0 or total_purchases > 0:
-                        product_avg_price = product_total_avg_prices.get(product, 0)
-                        product_delivery_rate = product_total_delivery_rates.get(product, 0)
-                        
-                        if product_avg_price > 0:
-                            calc_purchases_total = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) else total_purchases
-                            delivery_rate_total = product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate
-                            
-                            total_delivered_orders = calc_purchases_total * delivery_rate_total
-                            total_net_revenue = total_delivered_orders * product_avg_price
-                            total_product_cost_calc = total_delivered_orders * sum(product_date_cost_inputs.get(product, {}).values()) / len(product_date_cost_inputs.get(product, {})) if product_date_cost_inputs.get(product) else 0
-                            total_shipping_cost_calc = calc_purchases_total * shipping_rate
-                            total_operational_cost_calc = calc_purchases_total * operational_rate
-                            total_net_profit = total_net_revenue - (total_amount_spent_usd * 100) - total_shipping_cost_calc - total_operational_cost_calc - total_product_cost_calc
-                            
-                            denominator_total = product_avg_price * delivery_rate_total * calc_purchases_total
-                            campaign_net_profit_percentage = (total_net_profit / denominator_total * 100) if denominator_total > 0 else 0
+                    total_net_profit_sum = 0  # Sum of day-by-day net profits
                     
+                    # Get all dates for this campaign
+                    campaign_dates = sorted([str(d) for d in campaign_group['Date'].unique() if pd.notna(d) and str(d).strip() != ''])
+                    
+                    # Get product-level values
+                    product_avg_price = product_total_avg_prices.get(product, 0)
+                    product_delivery_rate = product_total_delivery_rates.get(product, 0)
+                    
+                    if product_avg_price > 0:
+                        # Calculate net profit by summing day-by-day (matching debug sheet)
+                        for date in campaign_dates:
+                            date_data = campaign_group[campaign_group['Date'].astype(str) == date]
+                            if not date_data.empty:
+                                row_data = date_data.iloc[0]
+                                
+                                # Get day-specific data
+                                date_amount_spent = row_data.get("Amount Spent (USD)", 0) or 0
+                                date_purchases = row_data.get("Purchases", 0) or 0
+                                
+                                # Get day-wise lookup data
+                                date_avg_price = round(product_date_avg_prices.get(product, {}).get(date, 0),2)
+                                date_delivery_rate = round(product_date_delivery_rates.get(product, {}).get(date, 0),2)
+                                date_product_cost = round(product_date_cost_inputs.get(product, {}).get(date, 0),2)
+                                
+                                # Calculate for this specific date (SAME AS DEBUG SHEET)
+                                calc_purchases_date = round(date_purchases,2)  # No special handling for zero here
+                                delivery_rate_date = round(date_delivery_rate / 100 if date_delivery_rate > 1 else date_delivery_rate,2)
+                                
+                                delivered_orders = round(calc_purchases_date * delivery_rate_date,2)
+                                net_revenue = round(delivered_orders * date_avg_price,2)
+                                total_product_cost_date = round(delivered_orders * date_product_cost,2)
+                                total_shipping_cost_date = round(calc_purchases_date * shipping_rate,2)
+                                total_operational_cost_date = round(calc_purchases_date * operational_rate,2)
+                                
+                                # Net profit for THIS DATE
+                                date_net_profit = round(net_revenue - (date_amount_spent * 100) - total_shipping_cost_date - total_operational_cost_date - total_product_cost_date,2)
+                                
+                                # ADD to total
+                                total_net_profit_sum += date_net_profit
+                        
+                        # Now calculate Net Profit % = Total Net Profit / (Avg Price * Total Purchases * Delivery Rate) * 100
+                        calc_purchases_total = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) else total_purchases
+                        delivery_rate_total = round(product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate,2)
+                        
+                        numerator_total = round(total_net_profit_sum, 2)
+                        denominator_total = round(product_avg_price * calc_purchases_total * delivery_rate_total, 2)
+                        campaign_net_profit_percentage = round((numerator_total / denominator_total * 100), 2) if denominator_total > 0 else 0
                     # Get data for last date net profit percentage calculation
                     amount_spent = row_data.get("Amount Spent (USD)", 0) or 0
                     purchases = row_data.get("Purchases", 0) or 0
@@ -4306,6 +4423,343 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         profit_loss_sheet.set_column(6, 6, 25)  # Right table Total Net Profit %
         profit_loss_sheet.set_column(7, 7, 20)  # Right table Total Net Profit
         
+        # ==== NEW SHEET: Scalable Campaigns ====
+        # ==== NEW SHEET: Scalable Campaigns ====
+        scalable_sheet = workbook.add_worksheet("Scalable Campaigns")
+        
+        # Formats for scalable campaigns sheet
+        scalable_header_format = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#4CAF50", "font_name": "Calibri", "font_size": 11
+        })
+        moderate_scalable_header_format = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#8BC34A", "font_name": "Calibri", "font_size": 11
+        })
+        high_scalable_header_format = workbook.add_format({
+            "bold": True, "align": "center", "valign": "vcenter",
+            "fg_color": "#2E7D32", "font_name": "Calibri", "font_size": 11
+        })
+        moderate_scalable_data_format = workbook.add_format({
+            "align": "left", "valign": "vcenter",
+            "fg_color": "#F1F8E9", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
+        })
+        high_scalable_data_format = workbook.add_format({
+            "align": "left", "valign": "vcenter",
+            "fg_color": "#C8E6C9", "font_name": "Calibri", "font_size": 11,
+            "num_format": "#,##0.00"
+        })
+        
+        current_row = 0
+        
+        # FIXED: Build a lookup of Net Profit % values from the ACTUAL product-campaign data
+        # We need to match the EXACT calculation used in the main sheet
+        # FIXED: Build a lookup of Net Profit % values using DAY-BY-DAY calculation
+        # This matches the approach in Negative Net Profit Campaigns sheet
+        campaign_data_lookup = {}
+        
+        for product, product_df in df_main.groupby("Product"):
+            for campaign_name, campaign_group in product_df.groupby("Campaign Name"):
+                # Calculate campaign totals
+                total_amount_spent_usd = campaign_group.get("Amount Spent (USD)", 0).sum() if "Amount Spent (USD)" in campaign_group.columns else 0
+                total_purchases = campaign_group.get("Purchases", 0).sum() if "Purchases" in campaign_group.columns else 0
+                
+                # Get product-level values
+                product_avg_price = round(product_total_avg_prices.get(product, 0), 2)
+                product_delivery_rate = round(product_total_delivery_rates.get(product, 0), 2)
+                
+                # Calculate Net Profit % using DAY-BY-DAY approach (matching Negative Net Profit Campaigns)
+                campaign_net_profit_percentage = 0
+                total_net_profit_sum = 0  # Sum of day-by-day net profits
+                
+                # Get all dates for this campaign
+                campaign_dates = sorted([str(d) for d in campaign_group['Date'].unique() if pd.notna(d) and str(d).strip() != ''])
+                
+                if product_avg_price > 0:
+                    # Calculate net profit by summing day-by-day (matching Negative Net Profit Campaigns sheet)
+                    for date in campaign_dates:
+                        date_data = campaign_group[campaign_group['Date'].astype(str) == date]
+                        if not date_data.empty:
+                            row_data = date_data.iloc[0]
+                            
+                            # Get day-specific data
+                            date_amount_spent = round(row_data.get("Amount Spent (USD)", 0) if pd.notna(row_data.get("Amount Spent (USD)")) else 0, 2)
+                            date_purchases = round(row_data.get("Purchases", 0) if pd.notna(row_data.get("Purchases")) else 0, 2)
+                            
+                            # Get day-wise lookup data
+                            date_avg_price = round(product_date_avg_prices.get(product, {}).get(date, 0), 2)
+                            date_delivery_rate = round(product_date_delivery_rates.get(product, {}).get(date, 0), 2)
+                            date_product_cost = round(product_date_cost_inputs.get(product, {}).get(date, 0), 2)
+                            
+                            # Calculate for this specific date (SAME AS NEGATIVE NET PROFIT CAMPAIGNS)
+                            calc_purchases_date = round(date_purchases, 2)  # No special handling for zero here
+                            delivery_rate_date = round(date_delivery_rate / 100 if date_delivery_rate > 1 else date_delivery_rate, 2)
+                            
+                            delivered_orders = round(calc_purchases_date * delivery_rate_date, 2)
+                            net_revenue = round(delivered_orders * date_avg_price, 2)
+                            total_product_cost_date = round(delivered_orders * date_product_cost, 2)
+                            total_shipping_cost_date = round(calc_purchases_date * shipping_rate, 2)
+                            total_operational_cost_date = round(calc_purchases_date * operational_rate, 2)
+                            
+                            # Net profit for THIS DATE
+                            date_net_profit = round(net_revenue - (date_amount_spent * 100) - total_shipping_cost_date - total_operational_cost_date - total_product_cost_date, 2)
+                            
+                            # ADD to total
+                            total_net_profit_sum += round(date_net_profit, 2)
+                    
+                    # Now calculate Net Profit % = Total Net Profit / (Avg Price * Total Purchases * Delivery Rate) * 100
+                    calc_purchases_total = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) else total_purchases
+                    delivery_rate_total = round(product_delivery_rate / 100 if product_delivery_rate > 1 else product_delivery_rate, 2)
+                    
+                    numerator_total = round(total_net_profit_sum, 2)
+                    denominator_total = round(product_avg_price * calc_purchases_total * delivery_rate_total, 2)
+                    campaign_net_profit_percentage = round((numerator_total / denominator_total * 100), 2) if denominator_total > 0 else 0
+                
+                # Store in lookup
+                campaign_key = (str(product), str(campaign_name))
+                campaign_data_lookup[campaign_key] = {
+                    'net_profit_pct': campaign_net_profit_percentage,
+                    'total_amount_spent': round(total_amount_spent_usd, 2),
+                    'total_purchases': int(total_purchases),
+                    'cpp': round(total_amount_spent_usd / max(total_purchases, 1), 2) if (total_amount_spent_usd > 0 and total_purchases == 0) or total_purchases > 0 else 0,
+                    'be': product_be_values.get(product, 0),
+                    'total_dates': len([d for d in campaign_group['Date'].unique() if pd.notna(d)])
+                }
+        
+        # Collect scalable campaigns (Net Profit % > 10)
+        scalable_campaigns = []
+        
+        for campaign_key, campaign_data in campaign_data_lookup.items():
+            if campaign_data['net_profit_pct'] > 10:
+                scalable_campaign = {
+                    'Product': campaign_key[0],
+                    'Campaign Name': campaign_key[1],
+                    'CPP': campaign_data['cpp'],
+                    'BE': campaign_data['be'],
+                    'Total Amount Spent (USD)': campaign_data['total_amount_spent'],
+                    'Total Purchases': campaign_data['total_purchases'],
+                    'Net Profit %': campaign_data['net_profit_pct'],
+                    'Total Dates': campaign_data['total_dates']
+                }
+                scalable_campaigns.append(scalable_campaign)
+        
+        # Split into two groups
+        # Split into FOUR groups based on Net Profit % AND Amount Spent
+        moderate_scalable_high_spend = [c for c in scalable_campaigns if 10 < c['Net Profit %'] <= 20 and c['Total Amount Spent (USD)'] >= 10]
+        moderate_scalable_low_spend = [c for c in scalable_campaigns if 10 < c['Net Profit %'] <= 20 and c['Total Amount Spent (USD)'] < 10]
+        high_scalable_high_spend = [c for c in scalable_campaigns if c['Net Profit %'] > 20 and c['Total Amount Spent (USD)'] >= 10]
+        high_scalable_low_spend = [c for c in scalable_campaigns if c['Net Profit %'] > 20 and c['Total Amount Spent (USD)'] < 10]
+        
+        # Sort all four groups by Net Profit % (highest first)
+        moderate_scalable_high_spend.sort(key=lambda x: x['Net Profit %'], reverse=True)
+        moderate_scalable_low_spend.sort(key=lambda x: x['Net Profit %'], reverse=True)
+        high_scalable_high_spend.sort(key=lambda x: x['Net Profit %'], reverse=True)
+        high_scalable_low_spend.sort(key=lambda x: x['Net Profit %'], reverse=True)
+        
+        # ==== TABLE 1A: MODERATE SCALABLE - HIGH SPEND (Amount >= $10) ====
+        safe_write(scalable_sheet, current_row, 0, "MODERATE SCALABLE CAMPAIGNS (10% < NET PROFIT % ≤ 20%) - AMOUNT SPENT ≥ $10", moderate_scalable_header_format)
+        current_row += 1
+        
+        # Headers
+        scalable_headers = ["Product", "Campaign Name", "CPP", "BE", "Total Amount Spent (USD)", 
+                           "Total Purchases", "Net Profit %", "Total Dates"]
+        
+        for col_num, header in enumerate(scalable_headers):
+            safe_write(scalable_sheet, current_row, col_num, header, moderate_scalable_header_format)
+        current_row += 1
+        
+        # Write moderate scalable campaigns - HIGH SPEND
+        if moderate_scalable_high_spend:
+            for campaign in moderate_scalable_high_spend:
+                safe_write(scalable_sheet, current_row, 0, campaign['Product'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 1, campaign['Campaign Name'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 2, campaign['CPP'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 3, campaign['BE'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 4, campaign['Total Amount Spent (USD)'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 5, campaign['Total Purchases'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 6, campaign['Net Profit %'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 7, campaign['Total Dates'], moderate_scalable_data_format)
+                current_row += 1
+        else:
+            safe_write(scalable_sheet, current_row, 0, "No campaigns found with Net Profit % between 10% and 20% and Amount Spent >= $10", moderate_scalable_data_format)
+            current_row += 1
+        
+        # Summary for moderate scalable - HIGH SPEND
+        current_row += 2
+        safe_write(scalable_sheet, current_row, 0, "SUMMARY - MODERATE SCALABLE (HIGH SPEND ≥ $10)", moderate_scalable_header_format)
+        current_row += 1
+        
+        total_moderate_high_campaigns = len(moderate_scalable_high_spend)
+        total_moderate_high_spend = sum([c['Total Amount Spent (USD)'] for c in moderate_scalable_high_spend])
+        total_moderate_high_purchases = sum([c['Total Purchases'] for c in moderate_scalable_high_spend])
+        avg_moderate_high_net_profit_pct = sum([c['Net Profit %'] for c in moderate_scalable_high_spend]) / total_moderate_high_campaigns if total_moderate_high_campaigns > 0 else 0
+        
+        safe_write(scalable_sheet, current_row, 0, f"Total Campaigns: {total_moderate_high_campaigns}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 1, 0, f"Total Amount Spent (USD): ${total_moderate_high_spend:,.2f}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 2, 0, f"Total Purchases: {total_moderate_high_purchases:,}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 3, 0, f"Average Net Profit %: {round(avg_moderate_high_net_profit_pct, 2)}%", moderate_scalable_data_format)
+        
+        current_row += 7  # Add gap between tables
+        
+        # ==== TABLE 1B: MODERATE SCALABLE - LOW SPEND (Amount < $10) ====
+        safe_write(scalable_sheet, current_row, 0, "MODERATE SCALABLE CAMPAIGNS (10% < NET PROFIT % ≤ 20%) - AMOUNT SPENT < $10", moderate_scalable_header_format)
+        current_row += 1
+        
+        for col_num, header in enumerate(scalable_headers):
+            safe_write(scalable_sheet, current_row, col_num, header, moderate_scalable_header_format)
+        current_row += 1
+        
+        # Write moderate scalable campaigns - LOW SPEND
+        if moderate_scalable_low_spend:
+            for campaign in moderate_scalable_low_spend:
+                safe_write(scalable_sheet, current_row, 0, campaign['Product'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 1, campaign['Campaign Name'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 2, campaign['CPP'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 3, campaign['BE'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 4, campaign['Total Amount Spent (USD)'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 5, campaign['Total Purchases'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 6, campaign['Net Profit %'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 7, campaign['Total Dates'], moderate_scalable_data_format)
+                current_row += 1
+        else:
+            safe_write(scalable_sheet, current_row, 0, "No campaigns found with Net Profit % between 10% and 20% and Amount Spent < $10", moderate_scalable_data_format)
+            current_row += 1
+        
+        # Summary for moderate scalable - LOW SPEND
+        current_row += 2
+        safe_write(scalable_sheet, current_row, 0, "SUMMARY - MODERATE SCALABLE (LOW SPEND < $10)", moderate_scalable_header_format)
+        current_row += 1
+        
+        total_moderate_low_campaigns = len(moderate_scalable_low_spend)
+        total_moderate_low_spend = sum([c['Total Amount Spent (USD)'] for c in moderate_scalable_low_spend])
+        total_moderate_low_purchases = sum([c['Total Purchases'] for c in moderate_scalable_low_spend])
+        avg_moderate_low_net_profit_pct = sum([c['Net Profit %'] for c in moderate_scalable_low_spend]) / total_moderate_low_campaigns if total_moderate_low_campaigns > 0 else 0
+        
+        safe_write(scalable_sheet, current_row, 0, f"Total Campaigns: {total_moderate_low_campaigns}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 1, 0, f"Total Amount Spent (USD): ${total_moderate_low_spend:,.2f}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 2, 0, f"Total Purchases: {total_moderate_low_purchases:,}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 3, 0, f"Average Net Profit %: {round(avg_moderate_low_net_profit_pct, 2)}%", moderate_scalable_data_format)
+        
+        current_row += 7  # Add gap between major sections
+        
+        # ==== TABLE 2A: HIGH SCALABLE - HIGH SPEND (Amount >= $10) ====
+        safe_write(scalable_sheet, current_row, 0, "HIGH SCALABLE CAMPAIGNS (NET PROFIT % > 20%) - AMOUNT SPENT ≥ $10", high_scalable_header_format)
+        current_row += 1
+        
+        for col_num, header in enumerate(scalable_headers):
+            safe_write(scalable_sheet, current_row, col_num, header, high_scalable_header_format)
+        current_row += 1
+        
+        # Write high scalable campaigns - HIGH SPEND
+        if high_scalable_high_spend:
+            for campaign in high_scalable_high_spend:
+                safe_write(scalable_sheet, current_row, 0, campaign['Product'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 1, campaign['Campaign Name'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 2, campaign['CPP'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 3, campaign['BE'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 4, campaign['Total Amount Spent (USD)'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 5, campaign['Total Purchases'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 6, campaign['Net Profit %'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 7, campaign['Total Dates'], high_scalable_data_format)
+                current_row += 1
+        else:
+            safe_write(scalable_sheet, current_row, 0, "No campaigns found with Net Profit % > 20% and Amount Spent >= $10", high_scalable_data_format)
+            current_row += 1
+        
+        # Summary for high scalable - HIGH SPEND
+        current_row += 2
+        safe_write(scalable_sheet, current_row, 0, "SUMMARY - HIGH SCALABLE (HIGH SPEND ≥ $10)", high_scalable_header_format)
+        current_row += 1
+        
+        total_high_high_campaigns = len(high_scalable_high_spend)
+        total_high_high_spend = sum([c['Total Amount Spent (USD)'] for c in high_scalable_high_spend])
+        total_high_high_purchases = sum([c['Total Purchases'] for c in high_scalable_high_spend])
+        avg_high_high_net_profit_pct = sum([c['Net Profit %'] for c in high_scalable_high_spend]) / total_high_high_campaigns if total_high_high_campaigns > 0 else 0
+        
+        safe_write(scalable_sheet, current_row, 0, f"Total Campaigns: {total_high_high_campaigns}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 1, 0, f"Total Amount Spent (USD): ${total_high_high_spend:,.2f}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 2, 0, f"Total Purchases: {total_high_high_purchases:,}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 3, 0, f"Average Net Profit %: {round(avg_high_high_net_profit_pct, 2)}%", high_scalable_data_format)
+        
+        current_row += 7  # Add gap between tables
+        
+        # ==== TABLE 2B: HIGH SCALABLE - LOW SPEND (Amount < $10) ====
+        safe_write(scalable_sheet, current_row, 0, "HIGH SCALABLE CAMPAIGNS (NET PROFIT % > 20%) - AMOUNT SPENT < $10", high_scalable_header_format)
+        current_row += 1
+        
+        for col_num, header in enumerate(scalable_headers):
+            safe_write(scalable_sheet, current_row, col_num, header, high_scalable_header_format)
+        current_row += 1
+        
+        # Write high scalable campaigns - LOW SPEND
+        if high_scalable_low_spend:
+            for campaign in high_scalable_low_spend:
+                safe_write(scalable_sheet, current_row, 0, campaign['Product'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 1, campaign['Campaign Name'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 2, campaign['CPP'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 3, campaign['BE'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 4, campaign['Total Amount Spent (USD)'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 5, campaign['Total Purchases'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 6, campaign['Net Profit %'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 7, campaign['Total Dates'], high_scalable_data_format)
+                current_row += 1
+        else:
+            safe_write(scalable_sheet, current_row, 0, "No campaigns found with Net Profit % > 20% and Amount Spent < $10", high_scalable_data_format)
+            current_row += 1
+        
+        # Summary for high scalable - LOW SPEND
+        current_row += 2
+        safe_write(scalable_sheet, current_row, 0, "SUMMARY - HIGH SCALABLE (LOW SPEND < $10)", high_scalable_header_format)
+        current_row += 1
+        
+        total_high_low_campaigns = len(high_scalable_low_spend)
+        total_high_low_spend = sum([c['Total Amount Spent (USD)'] for c in high_scalable_low_spend])
+        total_high_low_purchases = sum([c['Total Purchases'] for c in high_scalable_low_spend])
+        avg_high_low_net_profit_pct = sum([c['Net Profit %'] for c in high_scalable_low_spend]) / total_high_low_campaigns if total_high_low_campaigns > 0 else 0
+        
+        safe_write(scalable_sheet, current_row, 0, f"Total Campaigns: {total_high_low_campaigns}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 1, 0, f"Total Amount Spent (USD): ${total_high_low_spend:,.2f}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 2, 0, f"Total Purchases: {total_high_low_purchases:,}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 3, 0, f"Average Net Profit %: {round(avg_high_low_net_profit_pct, 2)}%", high_scalable_data_format)
+        
+        # Overall summary
+        current_row += 7
+        safe_write(scalable_sheet, current_row, 0, "OVERALL SUMMARY - ALL SCALABLE CAMPAIGNS", scalable_header_format)
+        current_row += 1
+        
+        total_scalable = len(scalable_campaigns)
+        total_scalable_spend = sum([c['Total Amount Spent (USD)'] for c in scalable_campaigns])
+        total_scalable_purchases = sum([c['Total Purchases'] for c in scalable_campaigns])
+        
+        # Calculate combined totals for each category
+        total_moderate_campaigns = total_moderate_high_campaigns + total_moderate_low_campaigns
+        total_high_campaigns = total_high_high_campaigns + total_high_low_campaigns
+        
+        safe_write(scalable_sheet, current_row, 0, f"Total Scalable Campaigns (Net Profit % > 10%): {total_scalable}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 1, 0, f"  • Moderate (10% < Net Profit % ≤ 20%): {total_moderate_campaigns}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 2, 0, f"    - High Spend (≥ $10): {total_moderate_high_campaigns}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 3, 0, f"    - Low Spend (< $10): {total_moderate_low_campaigns}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 4, 0, f"  • High (Net Profit % > 20%): {total_high_campaigns}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 5, 0, f"    - High Spend (≥ $10): {total_high_high_campaigns}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 6, 0, f"    - Low Spend (< $10): {total_high_low_campaigns}", high_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 7, 0, f"Total Amount Spent (USD): ${total_scalable_spend:,.2f}", moderate_scalable_data_format)
+        safe_write(scalable_sheet, current_row + 8, 0, f"Total Purchases: {total_scalable_purchases:,}", moderate_scalable_data_format)
+        
+        # Set column widths for scalable campaigns sheet
+        scalable_sheet.set_column(0, 0, 25)  # Product
+        scalable_sheet.set_column(1, 1, 40)  # Campaign Name
+        scalable_sheet.set_column(2, 2, 15)  # CPP
+        scalable_sheet.set_column(3, 3, 15)  # BE
+        scalable_sheet.set_column(4, 4, 25)  # Total Amount Spent (USD)
+        scalable_sheet.set_column(5, 5, 18)  # Total Purchases
+        scalable_sheet.set_column(6, 6, 18)  # Net Profit %
+        scalable_sheet.set_column(7, 7, 15)  # Total Dates
+        
+    
+        
+   
+        
     return output.getvalue()
 
 
@@ -4353,7 +4807,7 @@ if campaign_files:
         # Use new date-column structure if dates are present
         has_dates = 'Date' in df_final_campaign.columns
         if has_dates:
-            final_campaign_excel = convert_final_campaign_to_excel_with_date_columns_fixed(df_final_campaign)
+            final_campaign_excel = convert_final_campaign_to_excel_with_date_columns_fixed(df_final_campaign, df_shopify, selected_days)
             button_label = "🎯 Download Campaign File with Date Columns & Excel Formulas (Excel)"
             file_name = "campaign_date_columns_with_formulas_FIXED.xlsx"
         else:
@@ -4395,5 +4849,9 @@ if campaign_files or shopify_files or old_merged_files:
         unique_dates = df_shopify['Date'].unique()
         unique_dates = [str(d) for d in unique_dates if pd.notna(d) and str(d).strip() != '']
         st.info(f"📅 Found {len(unique_dates)} unique dates: {', '.join(sorted(unique_dates)[:5])}{'...' if len(unique_dates) > 5 else ''}")
+
+
+
+
 
 
