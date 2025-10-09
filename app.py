@@ -85,15 +85,31 @@ def standardize_campaign_columns(df):
     # Find and preserve Delivery status column
     delivery_status_col = None
     for col in df.columns:
-      if 'delivery' in col.lower() and 'status' in col.lower():
+      col_lower = col.lower()
+    # Check for either "delivery status" or "campaign delivery"
+      if ('delivery' in col_lower and 'status' in col_lower) or col_lower == 'campaign delivery':
         delivery_status_col = col
         break
 
+
     if delivery_status_col:
-      df['Delivery status'] = df[delivery_status_col]
+      def normalize_delivery_status(value):
+        if pd.isna(value) or str(value).strip() == "":
+            return ""
+        
+        value_lower = str(value).strip().lower()
+        
+        # Check if it's active (but not "inactive")
+        if "active" in value_lower and "inactive" not in value_lower:
+            return "Active"
+        else:
+            return "Inactive"
+    
+      df['Delivery status'] = df[delivery_status_col].apply(normalize_delivery_status)
+    
       if delivery_status_col != 'Delivery status':
         df = df.drop(columns=[delivery_status_col])
-      st.info(f"📝 Found Delivery status column: {delivery_status_col}")
+      st.info(f"📝 Found Delivery status column: {delivery_status_col} (normalized to Active/Inactive)")
     
     
     
