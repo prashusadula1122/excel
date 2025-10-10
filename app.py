@@ -4311,132 +4311,61 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         # Get campaigns already in first three tables
         already_processed = set((c['Product'], c['Campaign Name']) for c in filtered_campaigns)
 
+        # DO NOT skip any campaigns - get ALL campaigns with negative net profit on last date
+        # Remove the already_processed logic
         # Analyze last date
         last_date = unique_dates[-1] if unique_dates else None
         last_date_negative_campaigns = []
-
+        
         if last_date:
-            for product, product_df in df_main.groupby("Product"):
-                for campaign_name, campaign_group in product_df.groupby("Campaign Name"):
-                    # Skip if already processed
-                    if (str(product), str(campaign_name)) in already_processed:
-                        continue
+            # Use the complete analysis table data we already have
+            for campaign_complete in all_campaigns_complete_analysis:
+                product = campaign_complete['Product']
+                campaign_name = campaign_complete['Campaign Name']
+                # SKIP if this campaign is already in any of the first three tables
+                if (str(product), str(campaign_name)) in already_processed:
+                    continue
+                # Get the last date's net profit % from the day_wise_metrics
+                last_date_metrics = campaign_complete['day_wise_metrics'].get(last_date, {})
+                last_date_net_profit_pct = last_date_metrics.get('net_profit_pct', 0)
+                
+                # Only include campaigns with negative net profit % on last date
+                if last_date_net_profit_pct < 0:
+                    # Get additional data from df_main
+                    product_df = df_main[df_main['Product'] == product]
+                    campaign_group = product_df[product_df['Campaign Name'] == campaign_name]
                     
-                    # Check last date data
-                    last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
-                    if last_date_data.empty:
-                        continue
-                    
-                    row_data = last_date_data.iloc[0]
-                    
-                    # Calculate campaign totals
+                    # Get total amount spent and purchases
                     total_amount_spent_usd = campaign_group.get("Amount Spent (USD)", 0).sum() \
                         if "Amount Spent (USD)" in campaign_group.columns else 0
                     total_purchases = campaign_group.get("Purchases", 0).sum() \
                         if "Purchases" in campaign_group.columns else 0
                     
-                    cpp = 0
-                    if total_amount_spent_usd > 0 and total_purchases == 0:
-                        cpp = total_amount_spent_usd / 1
-                    elif total_purchases > 0:
-                        cpp = total_amount_spent_usd / total_purchases
+                    # Get last date specific data
+                    last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
+                    last_date_amount_spent = 0
+                    last_date_purchases = 0
                     
-                    be = product_be_values.get(product, 0)
+                    if not last_date_data.empty:
+                        last_date_row = last_date_data.iloc[0]
+                        last_date_amount_spent = round(last_date_row.get("Amount Spent (USD)", 0) or 0, 2)
+                        last_date_purchases = int(last_date_row.get("Purchases", 0) or 0)
                     
-                    # Calculate total Net Profit % (same as before)
-                    product_avg_price = round(product_total_avg_prices.get(product, 0), 2)
-                    product_delivery_rate = round(product_total_delivery_rates.get(product, 0), 2)
+                    last_date_campaign = {
+                        'Product': str(product),
+                        'Campaign Name': str(campaign_name),
+                        'CPP': campaign_complete['CPP'],
+                        'BE': campaign_complete['BE'],
+                        'Amount Spent (USD)': round(total_amount_spent_usd, 2),
+                        'Net Profit %': campaign_complete['Total Net Profit %'],
+                        'Last Date': format_date_readable(last_date),
+                        'Last Date Net Profit %': round(last_date_net_profit_pct, 2),
+                        'Last Date Amount Spent (USD)': last_date_amount_spent,
+                        'Last Date Purchases': last_date_purchases,
+                        'Reason': f"Negative net profit % ({round(last_date_net_profit_pct, 2)}%) on last date ({format_date_readable(last_date)})"
+                    }
                     
-                    campaign_dates = sorted([str(d) for d in campaign_group['Date'].unique() 
-                                           if pd.notna(d) and str(d).strip() != ''])
-                    
-                    total_net_profit_sum = 0
-                    
-                    if product_avg_price > 0:
-                        for date in campaign_dates:
-                            date_data = campaign_group[campaign_group['Date'].astype(str) == date]
-                            if not date_data.empty:
-                                row_data_date = date_data.iloc[0]
-                                
-                                date_amount_spent = round(row_data_date.get("Amount Spent (USD)", 0) 
-                                                        if pd.notna(row_data_date.get("Amount Spent (USD)")) else 0, 2)
-                                date_purchases = round(row_data_date.get("Purchases", 0) 
-                                                     if pd.notna(row_data_date.get("Purchases")) else 0, 2)
-                                
-                                date_avg_price = round(product_date_avg_prices.get(product, {}).get(date, 0), 2)
-                                date_delivery_rate = round(product_date_delivery_rates.get(product, {}).get(date, 0), 2)
-                                date_product_cost = round(product_date_cost_inputs.get(product, {}).get(date, 0), 2)
-                                
-                                calc_purchases_date = round(date_purchases, 2)
-                                delivery_rate_date = round(date_delivery_rate / 100 if date_delivery_rate > 1 
-                                                         else date_delivery_rate, 2)
-                                
-                                delivered_orders = round(calc_purchases_date * delivery_rate_date, 2)
-                                net_revenue = round(delivered_orders * date_avg_price, 2)
-                                total_product_cost_date = round(delivered_orders * date_product_cost, 2)
-                                total_shipping_cost_date = round(calc_purchases_date * shipping_rate, 2)
-                                total_operational_cost_date = round(calc_purchases_date * operational_rate, 2)
-                                
-                                date_net_profit = round(net_revenue - (date_amount_spent * 100) - 
-                                                      total_shipping_cost_date - total_operational_cost_date - 
-                                                      total_product_cost_date, 2)
-                                
-                                total_net_profit_sum += round(date_net_profit, 2)
-                        
-                        calc_purchases_total = 1 if (total_purchases == 0 and total_amount_spent_usd > 0) \
-                            else total_purchases
-                        delivery_rate_total = round(product_delivery_rate / 100 if product_delivery_rate > 1 
-                                                  else product_delivery_rate, 2)
-                        
-                        numerator_total = round(total_net_profit_sum, 2)
-                        denominator_total = round(product_avg_price * calc_purchases_total * delivery_rate_total, 2)
-                        campaign_net_profit_percentage = round((numerator_total / denominator_total * 100), 2) \
-                            if denominator_total > 0 else 0
-                    else:
-                        campaign_net_profit_percentage = 0
-                    
-                    # Calculate last date Net Profit %
-                    last_date_row = last_date_data.iloc[0]
-                    amount_spent = round(last_date_row.get("Amount Spent (USD)", 0) or 0, 2)
-                    purchases = round(last_date_row.get("Purchases", 0) or 0, 2)
-                    
-                    date_avg_price = round(product_date_avg_prices.get(product, {}).get(last_date, 0), 2)
-                    date_delivery_rate = round(product_date_delivery_rates.get(product, {}).get(last_date, 0), 2)
-                    date_product_cost = round(product_date_cost_inputs.get(product, {}).get(last_date, 0), 2)
-                    
-                    if date_avg_price > 0 and (purchases > 0 or (purchases == 0 and amount_spent > 0)):
-                        calc_purchases = 1 if (purchases == 0 and amount_spent > 0) else purchases
-                        delivery_rate = date_delivery_rate / 100 if date_delivery_rate > 1 else date_delivery_rate
-                        
-                        delivered_orders = round(calc_purchases * delivery_rate, 2)
-                        net_revenue = round(delivered_orders * date_avg_price, 2)
-                        total_product_cost = round(delivered_orders * date_product_cost, 2)
-                        total_shipping_cost = round(calc_purchases * shipping_rate, 2)
-                        total_operational_cost = round(calc_purchases * operational_rate, 2)
-                        net_profit = round(net_revenue - (amount_spent * 100) - total_shipping_cost - 
-                                         total_operational_cost - total_product_cost, 2)
-                        
-                        denominator = date_avg_price * delivery_rate * calc_purchases
-                        last_date_net_profit_pct = round((net_profit / denominator * 100), 2) \
-                            if denominator > 0 else 0
-                        
-                        # Only add if last date has negative Net Profit %
-                        if last_date_net_profit_pct < 0:
-                            last_date_campaign = {
-                                'Product': str(product),
-                                'Campaign Name': str(campaign_name),
-                                'CPP': round(cpp, 2),
-                                'BE': be,
-                                'Amount Spent (USD)': round(total_amount_spent_usd, 2),
-                                'Net Profit %': round(campaign_net_profit_percentage, 2),
-                                'Last Date': format_date_readable(last_date),
-                                'Last Date Net Profit %': round(last_date_net_profit_pct, 2),
-                                'Last Date Amount Spent (USD)': round(amount_spent, 2),
-                                'Last Date Purchases': int(purchases),
-                                'Reason': f"Negative net profit % ({round(last_date_net_profit_pct, 2)}%) on last date ({format_date_readable(last_date)})"
-                            }
-                            
-                            last_date_negative_campaigns.append(last_date_campaign)
+                    last_date_negative_campaigns.append(last_date_campaign)
 
         # Sort last date campaigns by last date net profit %
         last_date_negative_campaigns.sort(key=lambda x: x['Last Date Net Profit %'])
@@ -4484,9 +4413,8 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                   f"Campaigns with negative net profit % on last date: {len(last_date_negative_campaigns)}", 
                   last_date_data_format)
         safe_write(negative_profit_sheet, current_row + 3, 0, 
-                  f"Campaigns excluded (already in other tables): {len(already_processed)}", 
+                  "Note: Campaigns already in Tables 1-3 are excluded from this table", 
                   last_date_data_format)
-
         # OVERALL SUMMARY
         current_row += 5
         safe_write(negative_profit_sheet, current_row, 0, "OVERALL SUMMARY", 
