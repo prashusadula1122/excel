@@ -3379,7 +3379,8 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                         grand_total_format
                     )
 
-        # NEW: Add excluded products table at the end of the sheet
+        # NEW: Add excluded products table at the end of the sheet - RESTRUCTURED with campaigns
+        # SPLIT INTO TWO TABLES: All Active vs Has Inactive
         if excluded_products:
             # Add some spacing
             exclusion_start_row = row + 3
@@ -3388,36 +3389,346 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
             safe_write(worksheet, exclusion_start_row, 0, "PRODUCTS EXCLUDED FROM CALCULATIONS", exclusion_header_format)
             safe_write(worksheet, exclusion_start_row + 1, 0, "These products have product cost input = 0 and delivery rate = 0", exclusion_data_format)
             
-            # Headers for exclusion table
-            exclusion_headers = ["Product Name", "Campaign Count", "Total Amount Spent (USD)", "Total Purchases", "Reason"]
-            exclusion_header_row = exclusion_start_row + 3
+            current_exclusion_row = exclusion_start_row + 3
             
-            for col_num, header in enumerate(exclusion_headers):
-                safe_write(worksheet, exclusion_header_row, col_num, header, exclusion_header_format)
+            # NEW FORMAT: Product-level header formats
+            excluded_product_header_format = workbook.add_format({
+                "bold": True, "align": "left", "valign": "vcenter",
+                "fg_color": "#FF6B6B", "font_name": "Calibri", "font_size": 11
+            })
+            excluded_campaign_format = workbook.add_format({
+                "align": "left", "valign": "vcenter",
+                "fg_color": "#FFE6E6", "font_name": "Calibri", "font_size": 11,
+                "num_format": "#,##0.00"
+            })
             
-            # Write excluded products data
-            current_exclusion_row = exclusion_header_row + 1
-            for excluded_product in excluded_products:
-                safe_write(worksheet, current_exclusion_row, 0, excluded_product['Product'], exclusion_data_format)
-                safe_write(worksheet, current_exclusion_row, 1, excluded_product['Campaign Count'], exclusion_data_format)
-                safe_write(worksheet, current_exclusion_row, 2, excluded_product['Total Amount Spent (USD)'], exclusion_data_format)
-                safe_write(worksheet, current_exclusion_row, 3, excluded_product['Total Purchases'], exclusion_data_format)
-                safe_write(worksheet, current_exclusion_row, 4, excluded_product['Reason'], exclusion_data_format)
+            # NEW: Active product header format (different color)
+            active_product_header_format = workbook.add_format({
+                "bold": True, "align": "left", "valign": "vcenter",
+                "fg_color": "#90EE90", "font_name": "Calibri", "font_size": 11
+            })
+            active_campaign_format = workbook.add_format({
+                "align": "left", "valign": "vcenter",
+                "fg_color": "#E6FFE6", "font_name": "Calibri", "font_size": 11,
+                "num_format": "#,##0.00"
+            })
+            
+            # STEP 1: Categorize products based on last day delivery status
+            all_active_products = []
+            has_inactive_products = []
+            
+            for excluded_product_info in excluded_products:
+                product_name = excluded_product_info['Product']
+                product_df = df[df['Product'] == product_name]
+                
+                # Check all campaigns for this product
+                all_campaigns_active = True
+                
+                for campaign_name, campaign_group in product_df.groupby("Campaign Name"):
+                    # Get last day delivery status
+                    campaign_dates = sorted([str(d) for d in campaign_group['Date'].unique() 
+                                           if pd.notna(d) and str(d).strip() != ''])
+                    
+                    last_date = campaign_dates[-1] if campaign_dates else None
+                    last_day_delivery_status = ""
+                    
+                    if last_date:
+                        last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
+                        if not last_date_data.empty:
+                            row_data = last_date_data.iloc[0]
+                            delivery_status_raw = row_data.get("Delivery status", "")
+                            if pd.notna(delivery_status_raw) and str(delivery_status_raw).strip() != "":
+                                delivery_status_normalized = str(delivery_status_raw).strip().lower()
+                                if "active" in delivery_status_normalized and "inactive" not in delivery_status_normalized:
+                                    last_day_delivery_status = "Active"
+                                else:
+                                    last_day_delivery_status = "Inactive"
+                                    all_campaigns_active = False
+                            else:
+                                all_campaigns_active = False
+                        else:
+                            all_campaigns_active = False
+                    else:
+                        all_campaigns_active = False
+                    
+                    # If we found any non-active campaign, no need to check further
+                    if not all_campaigns_active:
+                        break
+                
+                # Categorize the product
+                if all_campaigns_active:
+                    all_active_products.append(excluded_product_info)
+                else:
+                    has_inactive_products.append(excluded_product_info)
+            
+            # STEP 2: TABLE 1 - Products with ALL campaigns active
+            if all_active_products:
+                safe_write(worksheet, current_exclusion_row, 0, 
+                          "TABLE 1: PRODUCTS WITH ALL CAMPAIGNS ACTIVE (LAST DAY)", 
+                          active_product_header_format)
+                current_exclusion_row += 2
+                
+                for excluded_product_info in all_active_products:
+                    product_name = excluded_product_info['Product']
+                    product_df = df[df['Product'] == product_name]
+                    
+                    # PRODUCT HEADER ROW
+                    safe_write(worksheet, current_exclusion_row, 0, product_name, active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 1, "ALL CAMPAIGNS", active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 2, "", active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 3, "", active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 4, "", active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 5, excluded_product_info['Reason'], 
+                              active_product_header_format)
+                    current_exclusion_row += 1
+                    
+                    # CAMPAIGN HEADERS
+                    campaign_headers = ["Product Name", "Campaign Name", "Amount Spent (USD)", "Purchases", 
+                                       "Last Day Delivery Status", "Reason"]
+                    for col_num, header in enumerate(campaign_headers):
+                        safe_write(worksheet, current_exclusion_row, col_num, header, exclusion_header_format)
+                    current_exclusion_row += 1
+                    
+                    # Get all campaigns for this product
+                    campaign_count = 0
+                    product_total_amount_spent = 0
+                    product_total_purchases = 0
+                    
+                    for campaign_name, campaign_group in product_df.groupby("Campaign Name"):
+                        campaign_count += 1
+                        
+                        # Calculate campaign totals
+                        total_amount_spent_usd = campaign_group.get("Amount Spent (USD)", 0).sum() \
+                            if "Amount Spent (USD)" in campaign_group.columns else 0
+                        total_purchases = campaign_group.get("Purchases", 0).sum() \
+                            if "Purchases" in campaign_group.columns else 0
+                        
+                        product_total_amount_spent += total_amount_spent_usd
+                        product_total_purchases += total_purchases
+                        
+                        # Get last day delivery status
+                        campaign_dates = sorted([str(d) for d in campaign_group['Date'].unique() 
+                                               if pd.notna(d) and str(d).strip() != ''])
+                        
+                        last_date = campaign_dates[-1] if campaign_dates else None
+                        last_day_delivery_status = ""
+                        
+                        if last_date:
+                            last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
+                            if not last_date_data.empty:
+                                row_data = last_date_data.iloc[0]
+                                delivery_status_raw = row_data.get("Delivery status", "")
+                                if pd.notna(delivery_status_raw) and str(delivery_status_raw).strip() != "":
+                                    delivery_status_normalized = str(delivery_status_raw).strip().lower()
+                                    if "active" in delivery_status_normalized and "inactive" not in delivery_status_normalized:
+                                        last_day_delivery_status = "Active"
+                                    else:
+                                        last_day_delivery_status = "Inactive"
+                                else:
+                                    last_day_delivery_status = "Unknown"
+                            else:
+                                last_day_delivery_status = "No Data"
+                        else:
+                            last_day_delivery_status = "No Dates"
+                        
+                        # Write campaign row
+                        safe_write(worksheet, current_exclusion_row, 0, product_name, active_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 1, str(campaign_name), active_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 2, round(total_amount_spent_usd, 2), 
+                                  active_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 3, int(total_purchases), 
+                                  active_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 4, last_day_delivery_status, 
+                                  active_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 5, 
+                                  "Product cost input = 0 and delivery rate = 0", active_campaign_format)
+                        current_exclusion_row += 1
+                    
+                    # PRODUCT SUMMARY ROW
+                    safe_write(worksheet, current_exclusion_row, 0, f"{product_name} - SUMMARY", 
+                              active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 1, f"Total Campaigns: {campaign_count}", 
+                              active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 2, round(product_total_amount_spent, 2), 
+                              active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 3, int(product_total_purchases), 
+                              active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 4, "", active_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 5, "", active_product_header_format)
+                    current_exclusion_row += 1
+                    
+                    # Add spacing between products
+                    current_exclusion_row += 1
+                
+                # Summary for all active products
                 current_exclusion_row += 1
+                safe_write(worksheet, current_exclusion_row, 0, "SUMMARY - ALL ACTIVE PRODUCTS", 
+                          exclusion_header_format)
+                current_exclusion_row += 1
+                
+                total_active_products = len(all_active_products)
+                total_active_campaigns = sum(p['Campaign Count'] for p in all_active_products)
+                total_active_amount = sum(p['Total Amount Spent (USD)'] for p in all_active_products)
+                total_active_purchases = sum(p['Total Purchases'] for p in all_active_products)
+                
+                safe_write(worksheet, current_exclusion_row, 0, 
+                          f"Products with all campaigns active: {total_active_products}", 
+                          exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row + 1, 0, 
+                          f"Total campaigns: {total_active_campaigns}", exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row + 2, 0, 
+                          f"Total amount spent: ${total_active_amount:,.2f}", exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row + 3, 0, 
+                          f"Total purchases: {total_active_purchases:,}", exclusion_data_format)
+                
+                current_exclusion_row += 6
             
-            # Add summary for excluded products
-            summary_row = current_exclusion_row + 1
-            safe_write(worksheet, summary_row, 0, "EXCLUSION SUMMARY", exclusion_header_format)
-            safe_write(worksheet, summary_row + 1, 0, f"Total excluded products: {len(excluded_products)}", exclusion_data_format)
+            # STEP 3: TABLE 2 - Products with at least one inactive campaign
+            if has_inactive_products:
+                safe_write(worksheet, current_exclusion_row, 0, 
+                          "TABLE 2: PRODUCTS WITH AT LEAST ONE INACTIVE CAMPAIGN (LAST DAY)", 
+                          excluded_product_header_format)
+                current_exclusion_row += 2
+                
+                for excluded_product_info in has_inactive_products:
+                    product_name = excluded_product_info['Product']
+                    product_df = df[df['Product'] == product_name]
+                    
+                    # PRODUCT HEADER ROW
+                    safe_write(worksheet, current_exclusion_row, 0, product_name, excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 1, "ALL CAMPAIGNS", excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 2, "", excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 3, "", excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 4, "", excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 5, excluded_product_info['Reason'], 
+                              excluded_product_header_format)
+                    current_exclusion_row += 1
+                    
+                    # CAMPAIGN HEADERS
+                    campaign_headers = ["Product Name", "Campaign Name", "Amount Spent (USD)", "Purchases", 
+                                       "Last Day Delivery Status", "Reason"]
+                    for col_num, header in enumerate(campaign_headers):
+                        safe_write(worksheet, current_exclusion_row, col_num, header, exclusion_header_format)
+                    current_exclusion_row += 1
+                    
+                    # Get all campaigns for this product
+                    campaign_count = 0
+                    product_total_amount_spent = 0
+                    product_total_purchases = 0
+                    
+                    for campaign_name, campaign_group in product_df.groupby("Campaign Name"):
+                        campaign_count += 1
+                        
+                        # Calculate campaign totals
+                        total_amount_spent_usd = campaign_group.get("Amount Spent (USD)", 0).sum() \
+                            if "Amount Spent (USD)" in campaign_group.columns else 0
+                        total_purchases = campaign_group.get("Purchases", 0).sum() \
+                            if "Purchases" in campaign_group.columns else 0
+                        
+                        product_total_amount_spent += total_amount_spent_usd
+                        product_total_purchases += total_purchases
+                        
+                        # Get last day delivery status
+                        campaign_dates = sorted([str(d) for d in campaign_group['Date'].unique() 
+                                               if pd.notna(d) and str(d).strip() != ''])
+                        
+                        last_date = campaign_dates[-1] if campaign_dates else None
+                        last_day_delivery_status = ""
+                        
+                        if last_date:
+                            last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
+                            if not last_date_data.empty:
+                                row_data = last_date_data.iloc[0]
+                                delivery_status_raw = row_data.get("Delivery status", "")
+                                if pd.notna(delivery_status_raw) and str(delivery_status_raw).strip() != "":
+                                    delivery_status_normalized = str(delivery_status_raw).strip().lower()
+                                    if "active" in delivery_status_normalized and "inactive" not in delivery_status_normalized:
+                                        last_day_delivery_status = "Active"
+                                    else:
+                                        last_day_delivery_status = "Inactive"
+                                else:
+                                    last_day_delivery_status = "Unknown"
+                            else:
+                                last_day_delivery_status = "No Data"
+                        else:
+                            last_day_delivery_status = "No Dates"
+                        
+                        # Write campaign row
+                        safe_write(worksheet, current_exclusion_row, 0, product_name, excluded_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 1, str(campaign_name), excluded_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 2, round(total_amount_spent_usd, 2), 
+                                  excluded_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 3, int(total_purchases), 
+                                  excluded_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 4, last_day_delivery_status, 
+                                  excluded_campaign_format)
+                        safe_write(worksheet, current_exclusion_row, 5, 
+                                  "Product cost input = 0 and delivery rate = 0", excluded_campaign_format)
+                        current_exclusion_row += 1
+                    
+                    # PRODUCT SUMMARY ROW
+                    safe_write(worksheet, current_exclusion_row, 0, f"{product_name} - SUMMARY", 
+                              excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 1, f"Total Campaigns: {campaign_count}", 
+                              excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 2, round(product_total_amount_spent, 2), 
+                              excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 3, int(product_total_purchases), 
+                              excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 4, "", excluded_product_header_format)
+                    safe_write(worksheet, current_exclusion_row, 5, "", excluded_product_header_format)
+                    current_exclusion_row += 1
+                    
+                    # Add spacing between products
+                    current_exclusion_row += 1
+                
+                # Summary for products with inactive campaigns
+                current_exclusion_row += 1
+                safe_write(worksheet, current_exclusion_row, 0, "SUMMARY - PRODUCTS WITH INACTIVE CAMPAIGNS", 
+                          exclusion_header_format)
+                current_exclusion_row += 1
+                
+                total_inactive_products = len(has_inactive_products)
+                total_inactive_campaigns = sum(p['Campaign Count'] for p in has_inactive_products)
+                total_inactive_amount = sum(p['Total Amount Spent (USD)'] for p in has_inactive_products)
+                total_inactive_purchases = sum(p['Total Purchases'] for p in has_inactive_products)
+                
+                safe_write(worksheet, current_exclusion_row, 0, 
+                          f"Products with at least one inactive campaign: {total_inactive_products}", 
+                          exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row + 1, 0, 
+                          f"Total campaigns: {total_inactive_campaigns}", exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row + 2, 0, 
+                          f"Total amount spent: ${total_inactive_amount:,.2f}", exclusion_data_format)
+                safe_write(worksheet, current_exclusion_row + 3, 0, 
+                          f"Total purchases: {total_inactive_purchases:,}", exclusion_data_format)
+                
+                current_exclusion_row += 6
+            
+            # OVERALL EXCLUSION SUMMARY
+            safe_write(worksheet, current_exclusion_row, 0, "OVERALL EXCLUSION SUMMARY", 
+                      exclusion_header_format)
+            current_exclusion_row += 1
             
             total_excluded_amount = sum(p['Total Amount Spent (USD)'] for p in excluded_products)
             total_excluded_purchases = sum(p['Total Purchases'] for p in excluded_products)
             total_excluded_campaigns = sum(p['Campaign Count'] for p in excluded_products)
             
-            safe_write(worksheet, summary_row + 2, 0, f"Total excluded amount spent: ${total_excluded_amount:,.2f}", exclusion_data_format)
-            safe_write(worksheet, summary_row + 3, 0, f"Total excluded purchases: {total_excluded_purchases:,}", exclusion_data_format)
-            safe_write(worksheet, summary_row + 4, 0, f"Total excluded campaigns: {total_excluded_campaigns}", exclusion_data_format)
-
+            safe_write(worksheet, current_exclusion_row, 0, f"Total excluded products: {len(excluded_products)}", 
+                      exclusion_data_format)
+            safe_write(worksheet, current_exclusion_row + 1, 0, 
+                      f"  • All campaigns active: {len(all_active_products)}", exclusion_data_format)
+            safe_write(worksheet, current_exclusion_row + 2, 0, 
+                      f"  • Has inactive campaigns: {len(has_inactive_products)}", exclusion_data_format)
+            safe_write(worksheet, current_exclusion_row + 3, 0, 
+                      f"Total excluded campaigns: {total_excluded_campaigns}", exclusion_data_format)
+            safe_write(worksheet, current_exclusion_row + 4, 0, 
+                      f"Total excluded amount spent: ${total_excluded_amount:,.2f}", exclusion_data_format)
+            safe_write(worksheet, current_exclusion_row + 5, 0, 
+                      f"Total excluded purchases: {total_excluded_purchases:,}", exclusion_data_format)
+            
+            
+            
         # Freeze panes to keep base columns visible when scrolling
         worksheet.freeze_panes(2, len(base_columns))
         
@@ -3442,7 +3753,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         
         # Headers for unmatched sheet
         unmatched_headers = ["Status", "Product", "Campaign Name", "Amount Spent (USD)", 
-                           "Amount Spent (INR)", "Purchases", "Cost Per Purchase (USD)", "Dates Covered", "Reason"]
+                           "Amount Spent (INR)", "Purchases", "Cost Per Purchase (USD)", "Last Day Delivery Status", "Dates Covered", "Reason"]
         
         for col_num, header in enumerate(unmatched_headers):
             safe_write(unmatched_sheet, 0, col_num, header, unmatched_header_format)
@@ -3455,6 +3766,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         safe_write(unmatched_sheet, summary_row + 3, 0, f"Unmatched with Shopify: {len(unmatched_campaigns)}", unmatched_data_format)
         safe_write(unmatched_sheet, summary_row + 4, 0, f"Date Range: {min(unique_dates)} to {max(unique_dates)}" if unique_dates else "No dates found", matched_summary_format)
         
+        # Write unmatched campaigns
         # Write unmatched campaigns
         current_row = summary_row + 6
         
@@ -3472,6 +3784,36 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 
                 dates_str = ", ".join(campaign['Dates']) if campaign['Dates'] else "No dates"
                 
+                # Get last day delivery status
+                product = campaign['Product']
+                campaign_name = campaign['Campaign Name']
+                product_df = df[df['Product'] == product]
+                campaign_group = product_df[product_df['Campaign Name'] == campaign_name]
+                
+                campaign_dates = sorted([str(d) for d in campaign_group['Date'].unique() 
+                                       if pd.notna(d) and str(d).strip() != ''])
+                
+                last_date = campaign_dates[-1] if campaign_dates else None
+                last_day_delivery_status = ""
+                
+                if last_date:
+                    last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
+                    if not last_date_data.empty:
+                        row_data = last_date_data.iloc[0]
+                        delivery_status_raw = row_data.get("Delivery status", "")
+                        if pd.notna(delivery_status_raw) and str(delivery_status_raw).strip() != "":
+                            delivery_status_normalized = str(delivery_status_raw).strip().lower()
+                            if "active" in delivery_status_normalized and "inactive" not in delivery_status_normalized:
+                                last_day_delivery_status = "Active"
+                            else:
+                                last_day_delivery_status = "Inactive"
+                        else:
+                            last_day_delivery_status = "Unknown"
+                    else:
+                        last_day_delivery_status = "No Data"
+                else:
+                    last_day_delivery_status = "No Dates"
+                
                 safe_write(unmatched_sheet, current_row, 0, "UNMATCHED", unmatched_data_format)
                 safe_write(unmatched_sheet, current_row, 1, campaign['Product'], unmatched_data_format)
                 safe_write(unmatched_sheet, current_row, 2, campaign['Campaign Name'], unmatched_data_format)
@@ -3479,8 +3821,9 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(unmatched_sheet, current_row, 4, campaign['Amount Spent (INR)'], unmatched_data_format)
                 safe_write(unmatched_sheet, current_row, 5, campaign['Purchases'], unmatched_data_format)
                 safe_write(unmatched_sheet, current_row, 6, cost_per_purchase_usd, unmatched_data_format)
-                safe_write(unmatched_sheet, current_row, 7, dates_str, unmatched_data_format)
-                safe_write(unmatched_sheet, current_row, 8, "No matching Shopify day-wise data found", unmatched_data_format)
+                safe_write(unmatched_sheet, current_row, 7, last_day_delivery_status, unmatched_data_format)
+                safe_write(unmatched_sheet, current_row, 8, dates_str, unmatched_data_format)
+                safe_write(unmatched_sheet, current_row, 9, "No matching Shopify day-wise data found", unmatched_data_format)
                 current_row += 1
         
         # Write matched campaigns summary
@@ -3521,9 +3864,9 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         unmatched_sheet.set_column(4, 4, 18)  # Amount INR
         unmatched_sheet.set_column(5, 5, 12)  # Purchases
         unmatched_sheet.set_column(6, 6, 20)  # Cost Per Purchase USD
-        unmatched_sheet.set_column(7, 7, 25)  # Dates Covered
-        unmatched_sheet.set_column(8, 8, 40)  # Reason
-        
+        unmatched_sheet.set_column(7, 7, 22)  # Last Day Delivery Status
+        unmatched_sheet.set_column(8, 8, 25)  # Dates Covered
+        unmatched_sheet.set_column(9, 9, 40)  # Reason
        
 
         # ==== SHEET: Negative Net Profit Campaigns ====
@@ -3922,12 +4265,12 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         # Add spacing before filtered tables
         current_row += 5
         # HIDE THE COMPLETE ANALYSIS TABLE (rows 0 to current_row - 6)
-# We keep it for calculations but hide it from view
+ # We keep it for calculations but hide it from view
         analysis_table_end_row = current_row - 6  # The row where analysis table ends
         for row_idx in range(0, analysis_table_end_row + 1):
               negative_profit_sheet.set_row(row_idx, None, None, {'hidden': True})
 
-# Add a visible header for the filtered tables section
+ # Add a visible header for the filtered tables section
         safe_write(negative_profit_sheet, current_row, 0, 
           "FILTERED CAMPAIGN ANALYSIS TABLES", 
           negative_profit_header_format)
@@ -4515,18 +4858,20 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         safe_write(profit_loss_sheet, current_row, 5, "NEGATIVE NET PROFIT PRODUCTS", negative_profit_header_format_top)
         current_row += 1
         
-        # Headers for both tables
-        positive_headers = ["Product Name", "Total Net Profit %", "Total Net Profit"]
-        negative_headers = ["Product Name", "Total Net Profit %", "Total Net Profit"]
+        # Headers for both tables - UPDATED: Added CPP and BE columns
+        positive_headers = ["Product Name", "CPP", "BE", "Total Net Profit %", "Total Net Profit"]
+        negative_headers = ["Product Name", "CPP", "BE", "Total Net Profit %", "Total Net Profit"]
         
-        # Write headers for positive table (left side)
+       # Write headers for positive table (left side)
         for col_num, header in enumerate(positive_headers):
             safe_write(profit_loss_sheet, current_row, col_num, header, positive_profit_header_format)
         
-        # Write headers for negative table (right side) - starting from column 5
+        # Write headers for negative table (right side) - starting from column 7 (was 5, now 7 due to 2 extra columns)
         for col_num, header in enumerate(negative_headers):
-            safe_write(profit_loss_sheet, current_row, col_num + 5, header, negative_profit_header_format_top)
+            safe_write(profit_loss_sheet, current_row, col_num + 7, header, negative_profit_header_format_top)
         current_row += 1
+        
+        # Filter and sort positive products by net profit (highest to lowest)
         
         # Filter and sort positive products by net profit (highest to lowest)
         positive_products = [(product, net_profit) for product, net_profit in product_net_profit_values.items() if net_profit >= 0]
@@ -4547,10 +4892,21 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 # Calculate Net Profit % for this product
                 product_data = df_main[df_main['Product'] == product]
                 total_purchases = product_data['Purchases'].sum() if 'Purchases' in product_data.columns else 0
+                total_amount_spent = product_data['Amount Spent (USD)'].sum() if 'Amount Spent (USD)' in product_data.columns else 0
                 
                 # Use the pre-calculated product-level values
                 product_avg_price = product_total_avg_prices.get(product, 0)
                 product_delivery_rate = product_total_delivery_rates.get(product, 0)
+                
+                # Calculate CPP
+                cpp = 0
+                if total_amount_spent > 0 and total_purchases == 0:
+                    cpp = total_amount_spent / 1
+                elif total_purchases > 0:
+                    cpp = total_amount_spent / total_purchases
+                
+                # Get BE value
+                be = product_be_values.get(product, 0)
                 
                 # Calculate Net Profit %
                 if product_avg_price > 0 and total_purchases > 0:
@@ -4561,8 +4917,10 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                     net_profit_percent = 0
                 
                 safe_write(profit_loss_sheet, current_row, 0, str(product), positive_profit_data_format)
-                safe_write(profit_loss_sheet, current_row, 1, round(net_profit_percent, 2), positive_profit_data_format)
-                safe_write(profit_loss_sheet, current_row, 2, net_profit, positive_profit_data_format)
+                safe_write(profit_loss_sheet, current_row, 1, round(cpp, 2), positive_profit_data_format)
+                safe_write(profit_loss_sheet, current_row, 2, round(be, 2), positive_profit_data_format)
+                safe_write(profit_loss_sheet, current_row, 3, round(net_profit_percent, 2), positive_profit_data_format)
+                safe_write(profit_loss_sheet, current_row, 4, net_profit, positive_profit_data_format)
             
             # RIGHT TABLE: Negative products
             if i < len(negative_products):
@@ -4570,10 +4928,21 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 # Calculate Net Profit % for this product
                 product_data = df_main[df_main['Product'] == product]
                 total_purchases = product_data['Purchases'].sum() if 'Purchases' in product_data.columns else 0
+                total_amount_spent = product_data['Amount Spent (USD)'].sum() if 'Amount Spent (USD)' in product_data.columns else 0
                 
                 # Use the pre-calculated product-level values
                 product_avg_price = product_total_avg_prices.get(product, 0)
                 product_delivery_rate = product_total_delivery_rates.get(product, 0)
+                
+                # Calculate CPP
+                cpp = 0
+                if total_amount_spent > 0 and total_purchases == 0:
+                    cpp = total_amount_spent / 1
+                elif total_purchases > 0:
+                    cpp = total_amount_spent / total_purchases
+                
+                # Get BE value
+                be = product_be_values.get(product, 0)
                 
                 # Calculate Net Profit %
                 if product_avg_price > 0 and total_purchases > 0:
@@ -4583,9 +4952,11 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 else:
                     net_profit_percent = 0
                 
-                safe_write(profit_loss_sheet, current_row, 5, str(product), negative_profit_data_format_top)
-                safe_write(profit_loss_sheet, current_row, 6, round(net_profit_percent, 2), negative_profit_data_format_top)
-                safe_write(profit_loss_sheet, current_row, 7, net_profit, negative_profit_data_format_top)
+                safe_write(profit_loss_sheet, current_row, 7, str(product), negative_profit_data_format_top)
+                safe_write(profit_loss_sheet, current_row, 8, round(cpp, 2), negative_profit_data_format_top)
+                safe_write(profit_loss_sheet, current_row, 9, round(be, 2), negative_profit_data_format_top)
+                safe_write(profit_loss_sheet, current_row, 10, round(net_profit_percent, 2), negative_profit_data_format_top)
+                safe_write(profit_loss_sheet, current_row, 11, net_profit, negative_profit_data_format_top)
             
             current_row += 1
 
@@ -4595,13 +4966,13 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
             current_row += 1
         
         if len(negative_products) == 0:
-            safe_write(profit_loss_sheet, current_row, 5, "No products with negative net profit found", negative_profit_data_format_top)
+            safe_write(profit_loss_sheet, current_row, 7, "No products with negative net profit found", negative_profit_data_format_top)
             current_row += 1
 
         # Add summaries for both tables side by side
         current_row += 2
         safe_write(profit_loss_sheet, current_row, 0, "SUMMARY - POSITIVE NET PROFIT PRODUCTS", positive_profit_header_format)
-        safe_write(profit_loss_sheet, current_row, 5, "SUMMARY - NEGATIVE NET PROFIT PRODUCTS", negative_profit_header_format_top)
+        safe_write(profit_loss_sheet, current_row, 7, "SUMMARY - NEGATIVE NET PROFIT PRODUCTS", negative_profit_header_format_top)
         current_row += 1
         
         total_positive_products = len(positive_products)
@@ -4613,15 +4984,15 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         avg_negative_net_profit = total_negative_net_profit / total_negative_products if total_negative_products > 0 else 0
         
         safe_write(profit_loss_sheet, current_row, 0, f"Total Positive Products: {total_positive_products}", positive_profit_data_format)
-        safe_write(profit_loss_sheet, current_row, 5, f"Total Negative Products: {total_negative_products}", negative_profit_data_format_top)
+        safe_write(profit_loss_sheet, current_row, 7, f"Total Negative Products: {total_negative_products}", negative_profit_data_format_top)
         current_row += 1
         
         safe_write(profit_loss_sheet, current_row, 0, f"Total Net Profit (Positive): {round(total_positive_net_profit, 2)}", positive_profit_data_format)
-        safe_write(profit_loss_sheet, current_row, 5, f"Total Net Loss (Negative): {round(total_negative_net_profit, 2)}", negative_profit_data_format_top)
+        safe_write(profit_loss_sheet, current_row, 7, f"Total Net Loss (Negative): {round(total_negative_net_profit, 2)}", negative_profit_data_format_top)
         current_row += 1
         
         safe_write(profit_loss_sheet, current_row, 0, f"Average Net Profit per Product: {round(avg_positive_net_profit, 2)}", positive_profit_data_format)
-        safe_write(profit_loss_sheet, current_row, 5, f"Average Net Loss per Product: {round(avg_negative_net_profit, 2)}", negative_profit_data_format_top)
+        safe_write(profit_loss_sheet, current_row, 7, f"Average Net Loss per Product: {round(avg_negative_net_profit, 2)}", negative_profit_data_format_top)
         
         current_row += 8  # Add gap between sections
         
@@ -4777,14 +5148,18 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
             current_row += 1
         
         # Set column widths for combined profit and loss sheet
-        profit_loss_sheet.set_column(0, 0, 30)  # Product Name / Category
-        profit_loss_sheet.set_column(1, 1, 25)  # Total Net Profit % / Count
-        profit_loss_sheet.set_column(2, 2, 20)  # Total Net Profit
-        profit_loss_sheet.set_column(3, 3, 25)  # Ratio / Average Net Profit
-        profit_loss_sheet.set_column(4, 4, 5)   # Separator column
-        profit_loss_sheet.set_column(5, 5, 30)  # Right table Product Name
-        profit_loss_sheet.set_column(6, 6, 25)  # Right table Total Net Profit %
-        profit_loss_sheet.set_column(7, 7, 20)  # Right table Total Net Profit
+        profit_loss_sheet.set_column(0, 0, 30)  # Product Name
+        profit_loss_sheet.set_column(1, 1, 15)  # CPP
+        profit_loss_sheet.set_column(2, 2, 15)  # BE
+        profit_loss_sheet.set_column(3, 3, 20)  # Total Net Profit %
+        profit_loss_sheet.set_column(4, 4, 20)  # Total Net Profit
+        profit_loss_sheet.set_column(5, 5, 3)   # Separator column
+        profit_loss_sheet.set_column(6, 6, 3)   # Separator column
+        profit_loss_sheet.set_column(7, 7, 30)  # Right table Product Name
+        profit_loss_sheet.set_column(8, 8, 15)  # Right table CPP
+        profit_loss_sheet.set_column(9, 9, 15)  # Right table BE
+        profit_loss_sheet.set_column(10, 10, 20) # Right table Total Net Profit %
+        profit_loss_sheet.set_column(11, 11, 20) # Right table Total Net Profit
         
         # ==== NEW SHEET: Scalable Campaigns ====
         # ==== NEW SHEET: Scalable Campaigns ====
@@ -4879,6 +5254,16 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                     denominator_total = round(product_avg_price * calc_purchases_total * delivery_rate_total, 2)
                     campaign_net_profit_percentage = round((numerator_total / denominator_total * 100), 2) if denominator_total > 0 else 0
                 
+                # Get last date amount spent
+                last_date = unique_dates[-1] if unique_dates else None
+                last_date_amount_spent = 0
+                
+                if last_date:
+                    last_date_data = campaign_group[campaign_group['Date'].astype(str) == last_date]
+                    if not last_date_data.empty:
+                        last_date_row = last_date_data.iloc[0]
+                        last_date_amount_spent = round(last_date_row.get("Amount Spent (USD)", 0) if pd.notna(last_date_row.get("Amount Spent (USD)")) else 0, 2)
+                
                 # Store in lookup
                 campaign_key = (str(product), str(campaign_name))
                 campaign_data_lookup[campaign_key] = {
@@ -4889,7 +5274,8 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                     'be': product_be_values.get(product, 0),
                     'total_dates': len([d for d in campaign_group['Date'].unique() 
                                    if pd.notna(d) and 
-                                   campaign_group[campaign_group['Date'].astype(str) == str(d)].get('Amount Spent (USD)', pd.Series([0])).iloc[0] > 0])
+                                   campaign_group[campaign_group['Date'].astype(str) == str(d)].get('Amount Spent (USD)', pd.Series([0])).iloc[0] > 0]),
+                    'last_date_amount_spent': last_date_amount_spent
                                 }
         
         # Collect scalable campaigns (Net Profit % > 10)
@@ -4905,7 +5291,8 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                     'Total Amount Spent (USD)': campaign_data['total_amount_spent'],
                     'Total Purchases': campaign_data['total_purchases'],
                     'Net Profit %': campaign_data['net_profit_pct'],
-                    'Total Dates': campaign_data['total_dates']
+                    'Total Dates': campaign_data['total_dates'],
+                    'Last Date Amount Spent (USD)': campaign_data['last_date_amount_spent']
                 }
                 scalable_campaigns.append(scalable_campaign)
         
@@ -4928,7 +5315,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         
         # Headers
         scalable_headers = ["Product", "Campaign Name", "CPP", "BE", "Total Amount Spent (USD)", 
-                           "Total Purchases", "Net Profit %", "Total Dates"]
+                           "Total Purchases", "Net Profit %", "Total Dates", "Last Date Amount Spent (USD)"]
         
         for col_num, header in enumerate(scalable_headers):
             safe_write(scalable_sheet, current_row, col_num, header, moderate_scalable_header_format)
@@ -4945,6 +5332,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(scalable_sheet, current_row, 5, campaign['Total Purchases'], moderate_scalable_data_format)
                 safe_write(scalable_sheet, current_row, 6, campaign['Net Profit %'], moderate_scalable_data_format)
                 safe_write(scalable_sheet, current_row, 7, campaign['Total Dates'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 8, campaign['Last Date Amount Spent (USD)'], moderate_scalable_data_format)
                 current_row += 1
         else:
             safe_write(scalable_sheet, current_row, 0, "No campaigns found with Net Profit % between 10% and 20% and Amount Spent >= $10", moderate_scalable_data_format)
@@ -4986,6 +5374,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(scalable_sheet, current_row, 5, campaign['Total Purchases'], moderate_scalable_data_format)
                 safe_write(scalable_sheet, current_row, 6, campaign['Net Profit %'], moderate_scalable_data_format)
                 safe_write(scalable_sheet, current_row, 7, campaign['Total Dates'], moderate_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 8, campaign['Last Date Amount Spent (USD)'], moderate_scalable_data_format)
                 current_row += 1
         else:
             safe_write(scalable_sheet, current_row, 0, "No campaigns found with Net Profit % between 10% and 20% and Amount Spent < $10", moderate_scalable_data_format)
@@ -5027,6 +5416,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(scalable_sheet, current_row, 5, campaign['Total Purchases'], high_scalable_data_format)
                 safe_write(scalable_sheet, current_row, 6, campaign['Net Profit %'], high_scalable_data_format)
                 safe_write(scalable_sheet, current_row, 7, campaign['Total Dates'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 8, campaign['Last Date Amount Spent (USD)'], high_scalable_data_format)
                 current_row += 1
         else:
             safe_write(scalable_sheet, current_row, 0, "No campaigns found with Net Profit % > 20% and Amount Spent >= $10", high_scalable_data_format)
@@ -5068,6 +5458,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
                 safe_write(scalable_sheet, current_row, 5, campaign['Total Purchases'], high_scalable_data_format)
                 safe_write(scalable_sheet, current_row, 6, campaign['Net Profit %'], high_scalable_data_format)
                 safe_write(scalable_sheet, current_row, 7, campaign['Total Dates'], high_scalable_data_format)
+                safe_write(scalable_sheet, current_row, 8, campaign['Last Date Amount Spent (USD)'], high_scalable_data_format)
                 current_row += 1
         else:
             safe_write(scalable_sheet, current_row, 0, "No campaigns found with Net Profit % > 20% and Amount Spent < $10", high_scalable_data_format)
@@ -5120,7 +5511,7 @@ def convert_final_campaign_to_excel_with_date_columns_fixed(df, shopify_df=None,
         scalable_sheet.set_column(5, 5, 18)  # Total Purchases
         scalable_sheet.set_column(6, 6, 18)  # Net Profit %
         scalable_sheet.set_column(7, 7, 15)  # Total Dates
-        
+        scalable_sheet.set_column(8, 8, 25)  # Last Date Amount Spent (USD)
     
         
    
